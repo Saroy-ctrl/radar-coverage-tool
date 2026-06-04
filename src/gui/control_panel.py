@@ -148,10 +148,9 @@ class ControlPanel(QWidget):
         self.label_diffraction_value.setMinimumWidth(35)
 
         # === Computation Resolution Group ===
-        self.label_resolution = QLabel("Computation Resolution:")
         self.combo_resolution = QComboBox()
         for name, _ in RESOLUTION_PRESETS.items():
-            self.combo_resolution.addItem(f"{name}  ({RESOLUTION_ESTIMATES[name]})")
+            self.combo_resolution.addItem(f"{name}  ({RESOLUTION_ESTIMATES[name]})", userData=name)
         self.combo_resolution.setCurrentIndex(0)  # Fast by default
 
         self.label_resolution_estimate = QLabel(f"Est. {RESOLUTION_ESTIMATES['Fast']}")
@@ -286,7 +285,6 @@ class ControlPanel(QWidget):
         # === Computation Resolution Group ===
         group_resolution = QGroupBox("Computation Resolution")
         gres_layout = QVBoxLayout()
-        gres_layout.addWidget(self.label_resolution)
         res_row = QHBoxLayout()
         res_row.addWidget(self.combo_resolution)
         res_row.addWidget(self.label_resolution_estimate)
@@ -350,7 +348,7 @@ class ControlPanel(QWidget):
 
     def _on_resolution_changed(self, index: int):
         """Update estimate label when resolution preset changes."""
-        name = list(RESOLUTION_PRESETS.keys())[index]
+        name = self.combo_resolution.itemData(index)
         if name in self._measured_elapsed:
             secs = self._measured_elapsed[name]
             if secs < 60:
@@ -363,15 +361,14 @@ class ControlPanel(QWidget):
 
     def recalibrate_estimate(self, elapsed_seconds: float):
         """Store measured elapsed time for the preset just used."""
+        name = self.combo_resolution.currentData()
         index = self.combo_resolution.currentIndex()
-        name = list(RESOLUTION_PRESETS.keys())[index]
         self._measured_elapsed[name] = elapsed_seconds
         self._on_resolution_changed(index)
 
     def _get_resolution_params(self) -> tuple[float, float]:
         """Return (azimuth_step_deg, range_step_m) for current preset."""
-        index = self.combo_resolution.currentIndex()
-        name = list(RESOLUTION_PRESETS.keys())[index]
+        name = self.combo_resolution.currentData()
         return RESOLUTION_PRESETS[name]
 
     def _on_load_dem_clicked(self):

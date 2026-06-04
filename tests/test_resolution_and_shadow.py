@@ -6,7 +6,6 @@ import os
 # imports main_window → would pull in more Qt modules even with mocks).
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'gui')))
 
-import control_panel as _cp
 from control_panel import ComputationRequest, RESOLUTION_PRESETS
 
 
