@@ -293,9 +293,9 @@ L.polyline({slatlngs_json}, {{
             h      = feat["height_m"]
             area   = feat["area_km2"]
             latlngs = feat["latlngs"]
-            ci     = self._get_color_info(h)
-            color  = ci["color"]
-            opacity = ci["opacity"]
+            ci      = self._get_color_info(h)
+            color   = ci["color"]
+            opacity = round(ci["opacity"] * self._coverage_opacity_factor, 4)
 
             # Serialise coordinate array to compact JSON
             latlngs_json = json.dumps(latlngs, separators=(',', ':'))
@@ -456,6 +456,18 @@ L.polygon({latlngs_json}, {{
             bounds: {{"north": float, "south": float, "east": float, "west": float}}
         """
         pass  # Could call fitBounds via JS if needed
+
+    def set_coverage_opacity(self, factor: float):
+        """Update coverage opacity multiplier and re-render. factor in [0.0, 1.0]."""
+        self._coverage_opacity_factor = max(0.0, min(1.0, factor))
+        features = self._build_coverage_features(self.coverage_data)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
+
+    def set_shadow_opacity(self, opacity: float):
+        """Update shadow line opacity and re-render. opacity in [0.0, 1.0]."""
+        self._shadow_opacity = max(0.0, min(1.0, opacity))
+        features = self._build_coverage_features(self.coverage_data)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
 
     def cleanup(self):
         """Remove the temporary HTML file."""
