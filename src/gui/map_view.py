@@ -46,6 +46,9 @@ class MapView(QWidget):
         self.radar_lon = 0.0
         self.coverage_data = {}
         self._shadow_features = []      # pre-built wedge list, rebuilt on set_shadow_data
+        self._coverage_opacity_factor = 1.0   # multiplier for all band opacities (0.0–1.0)
+        self._shadow_opacity = 0.5            # absolute opacity for shadow polylines (0.0–1.0)
+        self._max_range_m = 0.0               # set from shadow payload; drives range rings
 
         # Fixed temp file path — overwritten cleanly each render
         self._tmp_path = Path(tempfile.gettempdir()) / "radar_map_view.html"
@@ -221,17 +224,16 @@ class MapView(QWidget):
             coverage_features: list of feature dicts from _build_coverage_features()
             shadow_features: list of {"latlngs": [[lat, lon], ...]} dicts
         """
-        # Shadow polygons (rendered first — underneath coverage)
+        # Shadow polylines (rendered first — underneath coverage)
         shadow_blocks = []
         for sfeat in (shadow_features or []):
             slatlngs_json = json.dumps(sfeat["latlngs"], separators=(',', ':'))
             shadow_blocks.append(f"""\
-L.polygon({slatlngs_json}, {{
-    color: '#8b0000',
-    fillColor: '#8b0000',
-    weight: 0,
-    opacity: 0,
-    fillOpacity: 0.55
+L.polyline({slatlngs_json}, {{
+    color: '#cc2200',
+    weight: 1,
+    opacity: {self._shadow_opacity},
+    interactive: false
 }}).addTo(map);""")
 
         # Build JavaScript for each polygon

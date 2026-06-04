@@ -186,3 +186,17 @@ def test_build_shadow_features_significance_filter():
         max_range_m=max_r,
     )
     assert len(feats) == 90   # only the clearly-blocked azimuths
+
+
+def test_shadow_rendered_as_polyline_not_polygon():
+    """Shadow features must be rendered as L.polyline, not L.polygon."""
+    mv = _make_map_view()
+    mv._coverage_opacity_factor = 1.0
+    mv._shadow_opacity = 0.5
+    mv._max_range_m = 0.0
+
+    shadow_feats = [{"latlngs": [[51.6, 0.1], [51.8, 0.3]]}]
+    html = mv._generate_leaflet_html(51.5, 0.0, [], shadow_feats)
+
+    assert "L.polyline" in html
+    assert "L.polygon" not in html
