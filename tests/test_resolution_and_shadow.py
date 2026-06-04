@@ -231,3 +231,50 @@ def test_range_ring_js_empty_when_no_range():
 
     js = mv._generate_range_rings_js(51.5, 0.0, 0.0)
     assert js == ""
+
+
+def test_coverage_opacity_factor_applied_in_html():
+    """Coverage polygon opacity must equal band_base_opacity * factor."""
+    mv = _make_map_view()
+    mv._shadow_opacity = 0.5
+    mv._max_range_m = 0.0
+    mv._coverage_opacity_factor = 0.5   # half opacity
+
+    # 50m AGL band has base opacity 0.45 → expected 0.45 * 0.5 = 0.225
+    feats = [{"height_m": 50.0, "area_km2": 100.0,
+               "latlngs": [[51.5, 0.0], [51.6, 0.1], [51.5, 0.2]]}]
+    html = mv._generate_leaflet_html(51.5, 0.0, feats, [])
+
+    assert "0.225" in html
+
+
+def test_set_coverage_opacity_updates_factor():
+    """set_coverage_opacity must update _coverage_opacity_factor."""
+    mv = _make_map_view()
+    mv._shadow_opacity = 0.5
+    mv._max_range_m = 0.0
+    mv._shadow_features = []
+    mv.coverage_data = {}
+    mv.radar_lat = 51.5
+    mv.radar_lon = 0.0
+    mv._tmp_path = type('P', (), {'write_text': lambda self, *a, **k: None})()
+    mv.web_engine = type('W', (), {'setUrl': lambda self, *a, **k: None})()
+
+    mv.set_coverage_opacity(0.3)
+    assert mv._coverage_opacity_factor == 0.3
+
+
+def test_set_shadow_opacity_updates_value():
+    """set_shadow_opacity must update _shadow_opacity."""
+    mv = _make_map_view()
+    mv._coverage_opacity_factor = 1.0
+    mv._max_range_m = 0.0
+    mv._shadow_features = []
+    mv.coverage_data = {}
+    mv.radar_lat = 51.5
+    mv.radar_lon = 0.0
+    mv._tmp_path = type('P', (), {'write_text': lambda self, *a, **k: None})()
+    mv.web_engine = type('W', (), {'setUrl': lambda self, *a, **k: None})()
+
+    mv.set_shadow_opacity(0.8)
+    assert mv._shadow_opacity == 0.8

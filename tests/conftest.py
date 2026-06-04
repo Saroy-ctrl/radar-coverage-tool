@@ -26,3 +26,16 @@ except Exception:
     for _mod in _qt_mods:
         if _mod not in sys.modules:
             sys.modules[_mod] = MagicMock()
+
+    # Add a stub QUrl class with fromLocalFile method support
+    class _QUrlStub:
+        def __init__(self, url_str: str = ""):
+            self.url_str = url_str
+
+        @staticmethod
+        def fromLocalFile(path: str):
+            return _QUrlStub(f"file:///{path}")
+
+    # Replace the QUrl stub in PyQt6.QtCore with our version
+    if hasattr(sys.modules["PyQt6.QtCore"], "QUrl"):
+        sys.modules["PyQt6.QtCore"].QUrl = _QUrlStub
