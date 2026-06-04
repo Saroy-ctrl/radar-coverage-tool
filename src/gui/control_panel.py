@@ -8,6 +8,7 @@ Responsibilities:
 - Max instrumented range: spinbox (0–500km)
 - Height band selection: checkboxes for [50, 100, 500, 1000, 3000m]
 - Diffraction guard: slider (0–2°, default 0.5°)
+- Computation resolution presets: combo box (Fast/Standard/High/Ultra)
 - Compute button + "Computing..." indicator
 - Load DEM, Load Obstructions CSV, Export Coverage buttons
 - Signal: compute_requested(ComputationRequest) → main_window
@@ -73,6 +74,8 @@ class ControlPanel(QWidget):
     load_dem_requested = pyqtSignal()
     load_obstructions_requested = pyqtSignal()
     export_geojson_requested = pyqtSignal()
+    coverage_opacity_changed = pyqtSignal(float)
+    shadow_opacity_changed = pyqtSignal(float)
 
     def __init__(self):
         super().__init__()
@@ -202,6 +205,21 @@ class ControlPanel(QWidget):
         self.btn_export_png = QPushButton("Export PNG")
         self.btn_export_png.clicked.connect(self._on_export_png_clicked)
 
+        # === Display Group ===
+        self.label_coverage_opacity = QLabel("Coverage opacity:")
+        self.slider_coverage_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.slider_coverage_opacity.setRange(0, 100)
+        self.slider_coverage_opacity.setValue(100)
+        self.label_coverage_opacity_val = QLabel("100%")
+        self.label_coverage_opacity_val.setMinimumWidth(38)
+
+        self.label_shadow_opacity = QLabel("Shadow opacity:")
+        self.slider_shadow_opacity = QSlider(Qt.Orientation.Horizontal)
+        self.slider_shadow_opacity.setRange(0, 100)
+        self.slider_shadow_opacity.setValue(50)
+        self.label_shadow_opacity_val = QLabel("50%")
+        self.label_shadow_opacity_val.setMinimumWidth(38)
+
     def _populate_height_bands_table(self):
         """Populate height bands table with default heights."""
         self.table_heights.setRowCount(len(HEIGHT_BANDS))
@@ -292,6 +310,25 @@ class ControlPanel(QWidget):
         group_resolution.setLayout(gres_layout)
         layout.addWidget(group_resolution)
 
+        # === Display Group ===
+        group_display = QGroupBox("Display")
+        gdisp_layout = QVBoxLayout()
+
+        cov_row = QHBoxLayout()
+        cov_row.addWidget(self.label_coverage_opacity)
+        cov_row.addWidget(self.slider_coverage_opacity)
+        cov_row.addWidget(self.label_coverage_opacity_val)
+        gdisp_layout.addLayout(cov_row)
+
+        shd_row = QHBoxLayout()
+        shd_row.addWidget(self.label_shadow_opacity)
+        shd_row.addWidget(self.slider_shadow_opacity)
+        shd_row.addWidget(self.label_shadow_opacity_val)
+        gdisp_layout.addLayout(shd_row)
+
+        group_display.setLayout(gdisp_layout)
+        layout.addWidget(group_display)
+
         # === Height Bands Group ===
         group_heights = QGroupBox("Target Flight Heights")
         gh_layout = QVBoxLayout()
@@ -335,6 +372,8 @@ class ControlPanel(QWidget):
         self.slider_k_factor.valueChanged.connect(self._on_k_factor_changed)
         self.slider_diffraction.valueChanged.connect(self._on_diffraction_changed)
         self.combo_resolution.currentIndexChanged.connect(self._on_resolution_changed)
+        self.slider_coverage_opacity.valueChanged.connect(self._on_coverage_opacity_changed)
+        self.slider_shadow_opacity.valueChanged.connect(self._on_shadow_opacity_changed)
 
     def _on_k_factor_changed(self, value):
         """Update K-factor display."""
@@ -358,6 +397,16 @@ class ControlPanel(QWidget):
         else:
             label = RESOLUTION_ESTIMATES[name]
         self.label_resolution_estimate.setText(f"Est. {label}")
+
+    def _on_coverage_opacity_changed(self, value: int):
+        """Emit coverage opacity as 0.0–1.0 fraction."""
+        self.label_coverage_opacity_val.setText(f"{value}%")
+        self.coverage_opacity_changed.emit(value / 100.0)
+
+    def _on_shadow_opacity_changed(self, value: int):
+        """Emit shadow opacity as 0.0–1.0 fraction."""
+        self.label_shadow_opacity_val.setText(f"{value}%")
+        self.shadow_opacity_changed.emit(value / 100.0)
 
     def recalibrate_estimate(self, elapsed_seconds: float):
         """Store measured elapsed time for the preset just used."""
