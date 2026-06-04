@@ -167,11 +167,12 @@ class MapView(QWidget):
         max_range_m: float,
     ) -> list:
         """
-        Build dark-red shadow wedge polygons for terrain-blocked zones.
+        Build shadow centerline features for terrain-blocked azimuths.
 
-        For each azimuth, the shadow spans from the max visible range
-        (coverage boundary) to max_range_m. Each wedge is a 4-point
-        geodetic polygon one azimuth-step wide.
+        Returns one 2-point dict per blocked azimuth: the line from the
+        coverage boundary to max_range along the azimuth centre.
+        Azimuths where inner_r >= 0.85 * max_range_m are skipped
+        (barely-blocked directions add visual noise without insight).
 
         Args:
             ant_lat, ant_lon: antenna WGS84 position
@@ -180,35 +181,27 @@ class MapView(QWidget):
             max_range_m:      instrumented range limit
 
         Returns:
-            list of {"latlngs": [[lat, lon], ...]} dicts (4 points each)
+            list of {"latlngs": [[lat_inner, lon_inner], [lat_outer, lon_outer]]} dicts
         """
         from pyproj import Geod
         GEOD = Geod(ellps='WGS84')
-        half = azimuth_step_deg / 2.0
+        significance_threshold = 0.85 * max_range_m
         features = []
 
         for i, inner_r in enumerate(ranges_m):
-            outer_r = max_range_m
-            if inner_r >= outer_r:
-                continue   # no shadow: fully visible to max range
+            if inner_r >= significance_threshold:
+                continue
 
             az = i * azimuth_step_deg
-            az_left  = az - half
-            az_right = az + half
 
-            # 4 corners of the wedge: inner-left, outer-left, outer-right, inner-right
-            corners_az = [az_left,  az_left,  az_right, az_right]
-            corners_r  = [inner_r,  outer_r,  outer_r,  inner_r]
+            lon_inner, lat_inner, _ = GEOD.fwd(ant_lon, ant_lat, az, float(inner_r))
+            lon_outer, lat_outer, _ = GEOD.fwd(ant_lon, ant_lat, az, max_range_m)
 
-            lons, lats, _ = GEOD.fwd(
-                [ant_lon] * 4,
-                [ant_lat] * 4,
-                corners_az,
-                corners_r,
-            )
             features.append({
-                "latlngs": [[float(lat), float(lon)]
-                            for lat, lon in zip(lats, lons)]
+                "latlngs": [
+                    [float(lat_inner), float(lon_inner)],
+                    [float(lat_outer), float(lon_outer)],
+                ]
             })
 
         return features

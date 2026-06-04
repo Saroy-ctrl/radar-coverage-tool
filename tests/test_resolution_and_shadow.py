@@ -134,7 +134,7 @@ def test_build_shadow_features_full_coverage_no_shadow():
 
 
 def test_build_shadow_features_fully_blocked_returns_features():
-    """When all azimuths are blocked at min range, features should be produced for every azimuth."""
+    """All azimuths blocked at min range → one 2-point centerline per azimuth."""
     mv = _make_map_view()
     max_r = 100_000.0
     min_r = 200.0   # RANGE_STEP_M minimum
@@ -148,7 +148,7 @@ def test_build_shadow_features_fully_blocked_returns_features():
     assert len(feats) == 180
     for f in feats:
         assert "latlngs" in f
-        assert len(f["latlngs"]) == 4
+        assert len(f["latlngs"]) == 2   # inner point + outer point
 
 
 def test_build_shadow_features_latlngs_are_floats():
@@ -170,3 +170,19 @@ def test_build_shadow_features_latlngs_are_floats():
             assert isinstance(lon, float)
             assert -90 <= lat <= 90
             assert -180 <= lon <= 180
+
+
+def test_build_shadow_features_significance_filter():
+    """Azimuths with inner_r >= 0.85 * max_range_m must be skipped."""
+    mv = _make_map_view()
+    max_r = 100_000.0
+    # First 90 azimuths barely blocked (inner_r = 90 000 = 0.9 * max_r → skip)
+    # Next 90 azimuths clearly blocked (inner_r = 50 000 = 0.5 * max_r → keep)
+    ranges_m = [90_000.0] * 90 + [50_000.0] * 90
+    feats = mv._build_shadow_features(
+        ant_lat=51.5, ant_lon=0.0,
+        ranges_m=ranges_m,
+        azimuth_step_deg=2.0,
+        max_range_m=max_r,
+    )
+    assert len(feats) == 90   # only the clearly-blocked azimuths
