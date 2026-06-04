@@ -9,6 +9,8 @@
 
 **Status: Fully implemented and integrated.** All 6 backend engines are wired into the GUI. The app runs end-to-end: load a SRTM GeoTIFF → compute terrain-masked coverage → display coloured polygons on Leaflet map + polar OVD diagram.
 
+**Phase A resolution upgrade complete (June 2026).** Resolution presets added; terrain-blocking shadow layer implemented on Leaflet map.
+
 ### What exists at the root
 
 ```
@@ -25,7 +27,9 @@ src/
     map_view.py           ← QWebEngineView + hand-written Leaflet 1.9.4 HTML
     polar_view.py         ← Matplotlib embedded polar OVD diagram
 tests/
-  test_tier1_validation.py ← V1–V5 synthetic tests (no DEM needed)
+  test_tier1_validation.py      ← V1–V5 synthetic tests (no DEM needed)
+  test_resolution_and_shadow.py ← 8 tests for resolution presets + shadow wedge geometry
+  conftest.py                   ← PyQt6 headless stub for CI/test environments
 main.py                   ← entry point: python main.py
 requirements.txt
 data/                     ← gitignored; SRTM tiles go here
@@ -67,12 +71,16 @@ The worker runs in a `QThread`. High-level flow:
       max_r = ranges[1:][blocked_idx[0]] if blocked_idx.size else ranges[-1]
       coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
       ```
-5. Emit `coverage_computed(coverage_data)` and `polar_data_ready(polar_data)`
+5. Emit `coverage_computed`, `polar_data_ready`, `shadow_data_ready`, `computation_timed`
 
-**Key parameters:**
-- `RANGE_STEP_M = 200.0` (bin spacing)
-- `AZIMUTH_STEP = 2` degrees → 180 azimuths
+**Key parameters (now user-controlled via resolution preset):**
+- `RANGE_STEP_M = req.range_step_m` (200m Fast → 50m Ultra)
+- `AZIMUTH_STEP = req.azimuth_step_deg` (2° Fast → 0.5° Ultra)
 - Height bands passed as AGL metres (not AMSL)
+
+**New signals emitted after the azimuth loop:**
+- `shadow_data_ready(dict)` — `{"ranges_m": list, "azimuth_step_deg": float, "max_range_m": float}` using `min(height_bands_m)` (lowest band, most restrictive)
+- `computation_timed(float)` — wall-clock seconds; received by `ControlPanel.recalibrate_estimate()`
 
 ### `ComputationRequest` dataclass (src/gui/control_panel.py)
 
@@ -89,7 +97,21 @@ class ComputationRequest:
     diffraction_guard_deg: float
     dem_path: str = None
     obstructions_path: str = None
+    azimuth_step_deg: float = 2.0  # from resolution preset — DO NOT hardcode in worker
+    range_step_m: float = 200.0    # from resolution preset — DO NOT hardcode in worker
 ```
+
+### Resolution presets (src/gui/control_panel.py)
+
+```python
+RESOLUTION_PRESETS = {
+    "Fast":     (2.0,  200.0),   # ~30s
+    "Standard": (1.0,  100.0),   # ~2 min
+    "High":     (0.5,  100.0),   # ~4 min
+    "Ultra":    (0.5,   50.0),   # ~8 min
+}
+```
+Selected via `QComboBox` in "Computation Resolution" group. Estimate label recalibrates after each run using `recalibrate_estimate(elapsed_seconds)`. Preset name stored as `userData` on each combo item — retrieved via `currentData()`, not index arithmetic.
 
 ---
 
@@ -169,6 +191,11 @@ If void% > 20%: warn user. Any NaN reaching the computation loop = fatal bug.
 - Polar diagram: `theta_zero='N'`, `theta_direction=-1` (compass convention).
 - Map: `LocalContentCanAccessRemoteUrls=True` in `QWebEngineSettings`.
 - Map: hand-write Leaflet HTML with `L.polygon()` — do NOT use Folium GeoJson layer.
+- Map shadow layer: rendered **before** coverage polygons in HTML so coverage paints over it.
+- Shadow wedges: `color:'#8b0000'`, `fillOpacity:0.55`, `weight:0` — lowest height band only.
+- `_build_shadow_features()`: skip azimuth if `inner_r >= max_range_m` (no shadow needed).
+- `GEOD.fwd(lons, lats, azimuths, ranges)` — lons first, then lats (pyproj convention).
+- `ComputationRequest.azimuth_step_deg` / `range_step_m` — always read from request; NEVER hardcode in worker.
 - Area in status bar: `geod.geometry_area_perimeter(shapely.Polygon)` — NOT `polygon_area()`.
 - `CoverageEngine.compute_polygon_area()` still uses `GEOD.polygon_area(lons, lats)` — verify this works on your pyproj version.
 
@@ -229,13 +256,25 @@ Run with: `python -m pytest tests/test_tier1_validation.py -v`
 
 ## KNOWN GAPS / NEXT STEPS
 
+### Phase B — UI feature parity with Cambridge Pixel (not yet started)
+- Start range / inner donut hole (ring-shaped coverage instead of filled disc)
+- Beam elevation angle controls (min/max elevation angle, not just AGL height bands)
+- Coverage transparency slider (per-band opacity control in real time)
+- Map brightness/contrast sliders
+- DMS coordinate input (degrees/minutes/seconds)
+- Azimuth extent — compute partial sector (e.g. 90°–270° only)
+- Above Sea Level vs Ground toggle for target heights
+- True offline map (download Leaflet 1.9.4 + OSM tiles, embed locally)
+
+### Existing gaps
+
 1. **DEM preprocessing not fully wired in GUI.** `ComputationWorker.run()` does basic nodata→0 substitution inline instead of calling `DEMPreprocessor.fill_voids()`. Before running on data-rich tiles (Tibet, Crete), wire `terrain_engine.load_tile()` into the worker.
 
 2. **GeoJSON export is placeholder.** `_on_export_geojson()` in `main_window.py` reconstructs GeoJSON from stored `coverage_data` dict using placeholder ranges — it does not call the full `CoverageEngine.polar_to_geojson()` pipeline properly. Rewrite to build GeoJSON directly from `coverage_ranges_m` during the computation.
 
 3. **True offline not yet achieved.** Map tiles and Leaflet library load from CDN. For full offline operation, download Leaflet 1.9.4 and OSM tiles and embed locally.
 
-4. **180 azimuths at 2° resolution.** Adequate for display; increase `AZIMUTH_STEP` to 1° (360 azimuths) for smoother polygons when needed.
+4. ~~180 azimuths at 2° resolution~~ **RESOLVED.** Resolution preset selector added — Fast (2°/200m) through Ultra (0.5°/50m) selectable in the control panel.
 
 5. **Tier 1 test suite uses different API than main_window.** Tests call `VisibilityEngine.compute_target_visibility(profile, h_antenna, h_target_amsl_m)` with absolute AMSL height. The worker uses the per-range AGL path directly. Both are correct but test the engine differently.
 
