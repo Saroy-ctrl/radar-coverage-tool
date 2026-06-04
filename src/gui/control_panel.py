@@ -32,6 +32,21 @@ HEIGHT_BANDS = {
     3000: {"color": "#cc00ff", "name": "3000m (very high)"},
 }
 
+# Resolution presets: (azimuth_step_deg, range_step_m)
+RESOLUTION_PRESETS = {
+    "Fast":     (2.0,  200.0),
+    "Standard": (1.0,  100.0),
+    "High":     (0.5,  100.0),
+    "Ultra":    (0.5,   50.0),
+}
+
+RESOLUTION_ESTIMATES = {
+    "Fast":     "~30s",
+    "Standard": "~2 min",
+    "High":     "~4 min",
+    "Ultra":    "~8 min",
+}
+
 
 @dataclass
 class ComputationRequest:
@@ -46,6 +61,8 @@ class ComputationRequest:
     diffraction_guard_deg: float
     dem_path: str = None
     obstructions_path: str = None
+    azimuth_step_deg: float = 2.0
+    range_step_m: float = 200.0
 
 
 class ControlPanel(QWidget):
@@ -129,6 +146,19 @@ class ControlPanel(QWidget):
 
         self.label_diffraction_value = QLabel("0.5°")
         self.label_diffraction_value.setMinimumWidth(35)
+
+        # === Computation Resolution Group ===
+        self.label_resolution = QLabel("Computation Resolution:")
+        self.combo_resolution = QComboBox()
+        for name, _ in RESOLUTION_PRESETS.items():
+            self.combo_resolution.addItem(f"{name}  ({RESOLUTION_ESTIMATES[name]})")
+        self.combo_resolution.setCurrentIndex(0)  # Fast by default
+
+        self.label_resolution_estimate = QLabel(f"Est. {RESOLUTION_ESTIMATES['Fast']}")
+        self.label_resolution_estimate.setStyleSheet("color: #aaa; font-size: 11px;")
+
+        # Per-preset measured elapsed time (recalibrated after each run)
+        self._measured_elapsed = {}
 
         # === Height Bands Table ===
         self.label_heights = QLabel("Target Flight Heights:")
@@ -253,6 +283,17 @@ class ControlPanel(QWidget):
         group_radar.setLayout(gr_layout)
         layout.addWidget(group_radar)
 
+        # === Computation Resolution Group ===
+        group_resolution = QGroupBox("Computation Resolution")
+        gres_layout = QVBoxLayout()
+        gres_layout.addWidget(self.label_resolution)
+        res_row = QHBoxLayout()
+        res_row.addWidget(self.combo_resolution)
+        res_row.addWidget(self.label_resolution_estimate)
+        gres_layout.addLayout(res_row)
+        group_resolution.setLayout(gres_layout)
+        layout.addWidget(group_resolution)
+
         # === Height Bands Group ===
         group_heights = QGroupBox("Target Flight Heights")
         gh_layout = QVBoxLayout()
@@ -295,6 +336,7 @@ class ControlPanel(QWidget):
         """Connect internal signals (K-factor and diffraction sliders)."""
         self.slider_k_factor.valueChanged.connect(self._on_k_factor_changed)
         self.slider_diffraction.valueChanged.connect(self._on_diffraction_changed)
+        self.combo_resolution.currentIndexChanged.connect(self._on_resolution_changed)
 
     def _on_k_factor_changed(self, value):
         """Update K-factor display."""
@@ -305,6 +347,32 @@ class ControlPanel(QWidget):
         """Update diffraction guard display."""
         angle = value * 0.1
         self.label_diffraction_value.setText(f"{angle:.1f}°")
+
+    def _on_resolution_changed(self, index: int):
+        """Update estimate label when resolution preset changes."""
+        name = list(RESOLUTION_PRESETS.keys())[index]
+        if name in self._measured_elapsed:
+            secs = self._measured_elapsed[name]
+            if secs < 60:
+                label = f"~{secs:.0f}s"
+            else:
+                label = f"~{secs/60:.1f} min"
+        else:
+            label = RESOLUTION_ESTIMATES[name]
+        self.label_resolution_estimate.setText(f"Est. {label}")
+
+    def recalibrate_estimate(self, elapsed_seconds: float):
+        """Store measured elapsed time for the preset just used."""
+        index = self.combo_resolution.currentIndex()
+        name = list(RESOLUTION_PRESETS.keys())[index]
+        self._measured_elapsed[name] = elapsed_seconds
+        self._on_resolution_changed(index)
+
+    def _get_resolution_params(self) -> tuple[float, float]:
+        """Return (azimuth_step_deg, range_step_m) for current preset."""
+        index = self.combo_resolution.currentIndex()
+        name = list(RESOLUTION_PRESETS.keys())[index]
+        return RESOLUTION_PRESETS[name]
 
     def _on_load_dem_clicked(self):
         """Open DEM file dialog."""
@@ -331,6 +399,7 @@ class ControlPanel(QWidget):
 
         # Gather parameters
         site_elev = self.spin_site_elev.value()
+        az_step, rng_step = self._get_resolution_params()
         request = ComputationRequest(
             radar_lat=self.spin_lat.value(),
             radar_lon=self.spin_lon.value(),
@@ -342,6 +411,8 @@ class ControlPanel(QWidget):
             diffraction_guard_deg=self.slider_diffraction.value() * 0.1,
             dem_path=self.dem_path,
             obstructions_path=self.obstructions_path,
+            azimuth_step_deg=az_step,
+            range_step_m=rng_step,
         )
 
         # Update UI state
