@@ -567,6 +567,8 @@ class MainWindow(QMainWindow):
         self.computation_worker.polar_data_ready.connect(self._on_polar_data_ready)
         self.computation_worker.error_occurred.connect(self._on_computation_error)
         self.computation_worker.computation_finished.connect(self._on_computation_finished)
+        self.computation_worker.shadow_data_ready.connect(self._on_shadow_data_ready)
+        self.computation_worker.computation_timed.connect(self._on_computation_timed)
         self.computation_worker.start()
 
     def _on_progress_update(self, message: str):
@@ -604,6 +606,17 @@ class MainWindow(QMainWindow):
     def _on_polar_data_ready(self, polar_data: dict):
         """Receive polar diagram data from worker."""
         self.polar_view.update_data(polar_data)
+
+    def _on_shadow_data_ready(self, payload: dict):
+        """Forward shadow blocking data to MapView."""
+        req = self.computation_request
+        if req is None:
+            return
+        self.map_view.set_shadow_data(req.radar_lat, req.radar_lon, payload)
+
+    def _on_computation_timed(self, elapsed_seconds: float):
+        """Recalibrate control panel estimate label with measured time."""
+        self.control_panel.recalibrate_estimate(elapsed_seconds)
 
     def _on_computation_error(self, error_msg: str):
         """Handle computation error."""
