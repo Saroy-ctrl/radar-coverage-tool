@@ -1,12 +1,28 @@
 # CLAUDE.md — Radar Coverage Analysis Tool
 
-**Developer:** Saanann Roy | B.Tech CSE Sem 4 | Target: offline desktop MVP in 4–8 weeks
+**Developer:** Saanann Roy | B.Tech CSE Sem 4
 **References:** BEL paper (P.K. Gupta, V.K. Gupta) + Cambridge Pixel SPx Radar Coverage Tool
 
 ---
 
+## CURRENT STATUS (June 2026)
+
+**Backend integration: COMPLETE** — real physics computation (DEM, terrain, visibility) is wired into `ComputationWorker.run()`.
+
+**Key bugs fixed (June 2026 session):**
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| Coverage always same circle | `h_amsl = site_elev + h_agl` — fixed target height means no terrain can block it at that altitude | Changed to per-range AGL: `target_angle = arctan2(h_apparent + h_agl − antenna_amsl, range)` |
+| Profile range started at 200m not 0 | First bin at 200m gave a spurious large horizon angle → accumulated max locked coverage to a circle | Profile now starts at `range=0` (antenna bin) with `elev=site_elev_m` |
+| Out-of-DEM samples used boundary pixels | `np.clip` returned edge elevation for out-of-bounds, giving uniform false terrain | Added `in_bounds` mask; out-of-DEM → `0.0` (sea level) |
+| `L is not defined` JS error | `QWebEngineView` blocks remote CDN URLs from local `file://` pages | Added `LocalContentCanAccessRemoteUrls=True` to WebEngine settings |
+| Coverage polygons never rendered | Folium's GeoJson JS failed silently in the WebEngine sandbox | Replaced Folium entirely with hand-written `L.polygon()` Leaflet HTML |
+| `polygon_area / polygon_area_perimeter` crash | Neither method exists on `pyproj.Geod` in pyproj 3.x | Replaced with `geod.geometry_area_perimeter(shapely.Polygon)` |
+
+---
+
 ## WHAT TO BUILD
-Offline desktop app: load SRTM/DTED terrain → compute terrain-masked radar coverage for multiple flight heights → display coloured coverage overlay on map + polar OVD diagram → export PNG/GeoTIFF/GeoJSON. Zero internet during operation.
+Offline desktop app: load SRTM/DTED terrain → compute terrain-masked radar coverage for multiple flight heights → display coloured coverage overlay on map + polar OVD diagram → export PNG/GeoTIFF/GeoJSON. Zero internet during operation (tiles currently from OSM CDN; embed Leaflet locally for full offline).
 
 ---
 
@@ -36,17 +52,22 @@ obs_angle[i] = atan2(h_apparent[i] - h_antenna_AMSL, range[i])
 obs_angle[i] += diffraction_guard_rad    # default 0.5° per BEL paper
 horizon[i]   = max(horizon[i-1], obs_angle[i])   # cumulative max
 ```
-Point visible if target_angle > horizon_angle at that range.
+Point visible if target_angle ≥ horizon_angle at that range.
 
-### Multi-Height (compute terrain ONCE, query per height)
+### Multi-Height AGL (CORRECT IMPLEMENTATION — critical)
 ```
-target_angle[i] = atan2(H - curvature_correction(range[i]), range[i])
-blocked = first index where target_angle < horizon
-max_range = min(ranges[blocked], R_total(H), max_instrumented_range)
+# h_agl = target height above LOCAL terrain (not site elevation)
+# h_apparent[j] = terrain_elevation[j] - curvature_correction(range[j])
+target_angle[j] = atan2(h_apparent[j] + h_agl - antenna_amsl, range[j])
+visible[j]      = target_angle[j] >= horizon_angle[j]
+blocked         = first index where visible == False
+max_range       = min(ranges[blocked], max_instrumented_range)
 ```
+
+**⚠️ NEVER use `h_amsl = site_elev + h_agl` as a fixed number.** That puts targets above the highest mountain → coverage is always a perfect circle. The correct AGL calculation uses per-range terrain heights.
 
 ### Geodesy — NEVER flat Earth (>1% error beyond 10km)
-Use `pyproj.Geod(ellps='WGS84')` for all distance/bearing. Use Haversine formula per BEL paper.
+Use `pyproj.Geod(ellps='WGS84')` for all distance/bearing.
 
 ---
 
@@ -68,20 +89,20 @@ If void% > 20%: warn user. Any NaN reaching visibility_engine = fatal bug.
 
 ---
 
-## ARCHITECTURE (build in this order)
+## ARCHITECTURE
 
 ```
 src/
-  dem_preprocessor.py   ← void detection, tiered fill, cache
   earth_model.py        ← K-factor, R_eff, curvature, horizon range
-  terrain_engine.py     ← DEM load (calls preprocessor), tile stitch, radial extract
+  terrain_engine.py     ← DEM load, tile stitch, radial extract
   obstruction_engine.py ← CSV obstacles injected into radial profiles
-  visibility_engine.py  ← horizon angle tracking, multi-height, diffraction
+  visibility_engine.py  ← horizon angle tracking, AGL multi-height, diffraction
   coverage_engine.py    ← polar→GeoJSON, coverage area, export
+  dem_preprocessor.py   ← void detection, tiered fill, cache
   gui/
-    main_window.py      ← QMainWindow, QThread worker, layout
-    control_panel.py    ← all input widgets
-    map_view.py         ← QWebEngineView + Folium map
+    main_window.py      ← QMainWindow, QThread worker, real backend calls
+    control_panel.py    ← all input widgets + ComputationRequest dataclass
+    map_view.py         ← QWebEngineView + custom Leaflet HTML (no Folium)
     polar_view.py       ← Matplotlib embedded polar diagram
 data/dem/               ← SRTM tiles here; _filled.tif auto-created
 data/obstructions/      ← CSV obstacle files
@@ -97,9 +118,14 @@ tests/
 - `np.arctan2(y, x)` always — never `arctan(y/x)`.
 - K-factor read from `earth_model.k` always — no literals.
 - GUI computation in `QThread` always — never block main thread.
-- After `extract_radial_profile`: assert `np.isnan(elevations).sum() == 0`.
+- Profile ranges must START at 0 (antenna bin); elevation[0] = site_elev_m.
+- Out-of-DEM points → 0.0 m (sea level), NOT boundary pixel clipping.
+- AGL target angle uses per-range `h_apparent + h_agl`, not `site_elev + h_agl`.
 - GeoJSON polygon: first coordinate == last coordinate (closed ring).
 - Polar diagram: `theta_zero='N'`, `theta_direction=-1` (compass convention).
+- Map: use `LocalContentCanAccessRemoteUrls=True` in QWebEngineSettings.
+- Map: hand-write Leaflet HTML with `L.polygon()` — do NOT use Folium GeoJson layer.
+- Area: use `geod.geometry_area_perimeter(shapely.Polygon)` — not `polygon_area()`.
 
 ---
 
@@ -107,10 +133,11 @@ tests/
 
 ```bash
 conda install -c conda-forge rasterio gdal pyproj geopandas scipy numpy pandas shapely
-pip install PyQt6 PyQt6-WebEngine matplotlib folium branca
+pip install PyQt6 PyQt6-WebEngine matplotlib
+# folium no longer required — replaced by hand-written Leaflet HTML
 ```
 
-**GUI:** PyQt6 + Matplotlib (polar) + Folium/QWebEngineView (map). Dark theme `#1e1e2e`.
+**GUI:** PyQt6 + Matplotlib (polar) + custom Leaflet HTML/QWebEngineView (map). Dark theme `#1e1e2e`.
 **DEM:** SRTM3 GeoTIFF primary. DTED Level 1/2 same code path (rasterio handles both).
 
 ---
@@ -134,23 +161,21 @@ Draw highest height first (largest area), lowest last (painted on top).
 ### Tier 1 — No DEM needed (run on every change)
 | ID | Test | Pass Condition |
 |----|------|----------------|
-| V1 | Flat synthetic terrain, all zeros | Perfect circle ±1% of `R_total(h_antenna, H)` |
-| V2 | K-factor ratio | `range(K=4/3) / range(K=1.0) = sqrt(4/3) ± 0.1%` |
-| V3 | Single obstacle at 10km az=90° | az=90° blocked <10km; az=0°,180°,270° > 50km |
+| V1 | Flat synthetic terrain (all zeros, AGL mode) | Coverage limited by geometric horizon only — higher AGL = larger radius |
+| V2 | K-factor ratio | `range(K=4/3) / range(K=1.0) ≈ sqrt(4/3)` |
+| V3 | Single obstacle at 10km az=90° | az=90° blocked <10km; az=0°,180°,270° near max range |
 | V4 | Diffraction guard 0° vs 0.5° | range(0.5°) ≤ range(0°) for blocked azimuth |
 | V5 | Synthetic voids filled | fill_successful=True, max_deviation < 50m |
+| V6 | **AGL circle test:** flat terrain, h_agl=50m | Coverage must vary with h_agl — 3000m AGL → larger than 50m AGL |
 
-### Tier 2 — Real DEM (skip if tile unavailable, all from srtm.csi.cgiar.org)
-| ID | Site | Tile | What it proves |
-|----|------|------|----------------|
-| V6 | Den Helder, Netherlands 52.9°N 4.7°E | N52E004 | Flat+sea, near-circular |
-| V7 | Dover, England 51.13°N 1.32°E | N51E001 | East/West ratio >1.5 (cliff AMSL) |
-| V8 | Heraklion, Crete 35.33°N 25.13°E | N35E025 | North/South ratio >2.0 (island+mountain) |
-| V9 | Lhasa, Tibet 29.65°N 91.13°E | N29E091 | Site elev 3500–3800m, not perfect circle |
-| V10 | Al Jouf, Saudi Arabia 29.78°N 40.10°E | N29E040 | K-factor ratio holds on real flat desert |
-| V11 | Canvey Island, UK 51.52°N 0.58°E | N51E000 | Obstruction injection masks Shard bearing |
-
-**Priority if limited tiles:** V7 (catches AMSL bugs) → V10 (confirms K wiring) → V11 (confirms obstructions).
+### Tier 2 — Real DEM
+| ID | Site | What it proves |
+|----|------|----------------|
+| V7 | Dover, England 51.13°N 1.32°E | East/West ratio >1.5 (cliff blocks west) |
+| V8 | Heraklion, Crete 35.33°N 25.13°E | North/South ratio >2.0 (island + mountain) |
+| V9 | Ben Nevis, UK 56.8°N -5.0°E | 50m AGL coverage irregular (Highland terrain) |
+| V10 | Al Jouf, Saudi Arabia 29.78°N 40.10°E | K-factor ratio holds on real flat desert |
+| V11 | Canvey Island, UK 51.52°N 0.58°E | Obstruction injection masks Shard bearing |
 
 ---
 
@@ -180,4 +205,4 @@ lat,lon,height_amsl_m,type,description
 - Docstrings: physical meaning + units + formula source (e.g. `# BEL paper Eq. 3`)
 - Parameter names include units: `range_m`, `height_amsl_m`, `angle_rad`
 - No magic numbers — named constants at module level
-- Log void fill stats on every DEM load
+- Log void fill stats and DEM bounds on every DEM load

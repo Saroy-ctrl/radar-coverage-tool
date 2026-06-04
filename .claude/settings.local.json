@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git rm *)",
+      "Bash(xcopy \".claude\\\\worktrees\\\\agent-afb2282272e7456b4\\\\src\" \"src\" /E /I /Y)",
+      "Bash(xcopy \".claude\\\\worktrees\\\\agent-af40b3f625c46f771\\\\tests\" \"tests\" /E /I /Y)",
+      "Bash(copy \".claude\\\\worktrees\\\\agent-afb2282272e7456b4\\\\main.py\" \"main.py\" /Y)",
+      "Bash(copy \".claude\\\\worktrees\\\\agent-afb2282272e7456b4\\\\requirements.txt\" \"requirements.txt\" /Y)",
+      "Bash(Copy-Item -Path \".\\\\.claude\\\\worktrees\\\\agent-afb2282272e7456b4\\\\src\" -Destination \".\\\\src\" -Recurse -Force)",
+      "Bash(Copy-Item -Path \".\\\\.claude\\\\worktrees\\\\agent-af40b3f625c46f771\\\\tests\" -Destination \".\\\\tests\" -Recurse -Force)",
+      "Bash(Copy-Item -Path \".\\\\.claude\\\\worktrees\\\\agent-afb2282272e7456b4\\\\main.py\" -Destination \".\\\\main.py\" -Force)",
+      "Bash(Copy-Item -Path \".\\\\.claude\\\\worktrees\\\\agent-afb2282272e7456b4\\\\requirements.txt\" -Destination \".\\\\requirements.txt\" -Force)"
+    ]
+  }
+}

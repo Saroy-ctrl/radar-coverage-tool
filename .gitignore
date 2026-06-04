@@ -1,0 +1,35 @@
+# DEM tiles and preprocessed cache (large binary files)
+data/
+
+# Claude Code internal worktrees (agent workspaces)
+.claude/worktrees/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp

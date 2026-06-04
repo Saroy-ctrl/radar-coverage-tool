@@ -1,0 +1,391 @@
+"""
+Control Panel — All input widgets for radar parameters.
+
+Responsibilities:
+- Radar antenna location: lat/lon spinboxes (WGS84, ±0.0001°)
+- Antenna AMSL height: spinbox (0–10000m)
+- K-factor slider + display (0.6–1.5, default 4/3 ≈ 1.333)
+- Max instrumented range: spinbox (0–500km)
+- Height band selection: checkboxes for [50, 100, 500, 1000, 3000m]
+- Diffraction guard: slider (0–2°, default 0.5°)
+- Compute button + "Computing..." indicator
+- Load DEM, Load Obstructions CSV, Export Coverage buttons
+- Signal: compute_requested(ComputationRequest) → main_window
+"""
+
+from dataclasses import dataclass
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QDoubleSpinBox,
+    QSlider, QPushButton, QCheckBox, QTableWidget, QTableWidgetItem, QFileDialog,
+    QProgressBar, QComboBox, QLineEdit
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor
+
+
+# Default height bands with Cambridge Pixel colors
+HEIGHT_BANDS = {
+    50: {"color": "#00cc44", "name": "50m (low)"},
+    100: {"color": "#aacc00", "name": "100m (low-mid)"},
+    500: {"color": "#ff8800", "name": "500m (mid)"},
+    1000: {"color": "#ff3300", "name": "1000m (high)"},
+    3000: {"color": "#cc00ff", "name": "3000m (very high)"},
+}
+
+
+@dataclass
+class ComputationRequest:
+    """Data class passed to compute signal."""
+    radar_lat: float
+    radar_lon: float
+    site_elevation_amsl_m: float
+    antenna_amsl_m: float
+    k_factor: float
+    max_range_km: float
+    height_bands_m: list[float]
+    diffraction_guard_deg: float
+    dem_path: str = None
+    obstructions_path: str = None
+
+
+class ControlPanel(QWidget):
+    """Control panel with all radar parameter inputs."""
+
+    # Signals
+    compute_requested = pyqtSignal(ComputationRequest)
+    load_dem_requested = pyqtSignal()
+    load_obstructions_requested = pyqtSignal()
+    export_geojson_requested = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.dem_path = None
+        self.obstructions_path = None
+        self.is_computing = False
+
+        self._create_widgets()
+        self._create_layout()
+        self._connect_signals()
+
+    def _create_widgets(self):
+        """Create all input widgets."""
+        # === Position Group ===
+        self.label_lat = QLabel("Latitude:")
+        self.spin_lat = QDoubleSpinBox()
+        self.spin_lat.setRange(-90.0, 90.0)
+        self.spin_lat.setValue(51.5)
+        self.spin_lat.setDecimals(4)
+        self.spin_lat.setSingleStep(0.01)
+
+        self.label_lon = QLabel("Longitude:")
+        self.spin_lon = QDoubleSpinBox()
+        self.spin_lon.setRange(-180.0, 180.0)
+        self.spin_lon.setValue(0.0)
+        self.spin_lon.setDecimals(4)
+        self.spin_lon.setSingleStep(0.01)
+
+        # === Radar Parameters Group ===
+        self.label_site_elev = QLabel("Site Elevation AMSL (m):")
+        self.spin_site_elev = QSpinBox()
+        self.spin_site_elev.setRange(0, 9000)
+        self.spin_site_elev.setValue(100)
+        self.spin_site_elev.setToolTip("Site elevation above mean sea level")
+
+        self.label_mast_height = QLabel("Mast Height (m):")
+        self.spin_mast_height = QSpinBox()
+        self.spin_mast_height.setRange(0, 100)
+        self.spin_mast_height.setValue(5)
+
+        self.label_antenna_height = QLabel("Antenna Height (m):")
+        self.spin_antenna_height = QSpinBox()
+        self.spin_antenna_height.setRange(0, 50)
+        self.spin_antenna_height.setValue(2)
+
+        self.label_max_range = QLabel("Max Instrumented Range (km):")
+        self.spin_max_range = QSpinBox()
+        self.spin_max_range.setRange(0, 500)
+        self.spin_max_range.setValue(100)
+
+        # K-factor with slider + display
+        self.label_k_factor = QLabel("K-Factor:")
+        self.slider_k_factor = QSlider(Qt.Orientation.Horizontal)
+        self.slider_k_factor.setRange(60, 150)  # 0.6 to 1.5 (× 100)
+        self.slider_k_factor.setValue(133)  # 4/3 ≈ 1.333
+        self.slider_k_factor.setSingleStep(1)
+        self.slider_k_factor.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.slider_k_factor.setTickInterval(10)
+
+        self.label_k_value = QLabel(f"1.333")
+        self.label_k_value.setMinimumWidth(40)
+
+        # Diffraction guard angle with slider
+        self.label_diffraction = QLabel("Diffraction Guard Angle (°):")
+        self.slider_diffraction = QSlider(Qt.Orientation.Horizontal)
+        self.slider_diffraction.setRange(0, 20)  # 0 to 2 degrees (× 0.1)
+        self.slider_diffraction.setValue(5)  # 0.5°
+        self.slider_diffraction.setSingleStep(1)
+        self.slider_diffraction.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.slider_diffraction.setTickInterval(2)
+
+        self.label_diffraction_value = QLabel("0.5°")
+        self.label_diffraction_value.setMinimumWidth(35)
+
+        # === Height Bands Table ===
+        self.label_heights = QLabel("Target Flight Heights:")
+        self.table_heights = QTableWidget()
+        self.table_heights.setColumnCount(3)
+        self.table_heights.setHorizontalHeaderLabels(["Enable", "Height (m)", "Color"])
+        self.table_heights.setMaximumHeight(150)
+        self._populate_height_bands_table()
+
+        # === DEM Source Group ===
+        self.label_dem = QLabel("DEM File:")
+        self.line_dem = QLineEdit()
+        self.line_dem.setReadOnly(True)
+        self.line_dem.setPlaceholderText("No DEM loaded")
+
+        self.btn_load_dem = QPushButton("Browse DEM...")
+        self.btn_load_dem.clicked.connect(self._on_load_dem_clicked)
+
+        # === Obstructions CSV Group ===
+        self.label_obstructions = QLabel("Obstructions CSV:")
+        self.line_obstructions = QLineEdit()
+        self.line_obstructions.setReadOnly(True)
+        self.line_obstructions.setPlaceholderText("No obstructions loaded")
+
+        self.btn_load_obstructions = QPushButton("Browse Obstructions...")
+        self.btn_load_obstructions.clicked.connect(self._on_load_obstructions_clicked)
+
+        # === Compute Button ===
+        self.btn_compute = QPushButton("COMPUTE")
+        self.btn_compute.setMinimumHeight(40)
+        self.btn_compute.setStyleSheet("font-size: 14px; font-weight: bold;")
+        self.btn_compute.clicked.connect(self._on_compute_clicked)
+
+        # Progress indicator
+        self.label_computing = QLabel("Ready")
+        self.label_computing.setStyleSheet("color: #4a9eff; font-weight: bold;")
+
+        # === Export Buttons ===
+        self.btn_export_geojson = QPushButton("Export GeoJSON")
+        self.btn_export_geojson.clicked.connect(self._on_export_geojson_clicked)
+
+        self.btn_export_png = QPushButton("Export PNG")
+        self.btn_export_png.clicked.connect(self._on_export_png_clicked)
+
+    def _populate_height_bands_table(self):
+        """Populate height bands table with default heights."""
+        self.table_heights.setRowCount(len(HEIGHT_BANDS))
+
+        for row, (height, info) in enumerate(HEIGHT_BANDS.items()):
+            # Checkbox (enable)
+            checkbox = QCheckBox()
+            checkbox.setChecked(True)
+            self.table_heights.setCellWidget(row, 0, checkbox)
+
+            # Height value
+            label_height = QLabel(str(height))
+            self.table_heights.setItem(row, 1, QTableWidgetItem(label_height.text()))
+
+            # Color swatch
+            color_widget = QWidget()
+            color_layout = QHBoxLayout(color_widget)
+            color_widget.setLayout(color_layout)
+
+            color_box = QLabel()
+            color_box.setStyleSheet(f"background-color: {info['color']}; border: 1px solid #555;")
+            color_box.setMinimumSize(30, 20)
+            color_layout.addWidget(color_box)
+            color_layout.addStretch()
+            self.table_heights.setCellWidget(row, 2, color_widget)
+
+        # Adjust column widths
+        self.table_heights.setColumnWidth(0, 50)
+        self.table_heights.setColumnWidth(1, 80)
+        self.table_heights.setColumnWidth(2, 80)
+
+    def _create_layout(self):
+        """Create main layout."""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        # === Position Group ===
+        group_position = QGroupBox("Antenna Location (WGS84)")
+        gp_layout = QVBoxLayout()
+        gp_layout.addWidget(self.label_lat)
+        gp_layout.addWidget(self.spin_lat)
+        gp_layout.addWidget(self.label_lon)
+        gp_layout.addWidget(self.spin_lon)
+        group_position.setLayout(gp_layout)
+        layout.addWidget(group_position)
+
+        # === Radar Parameters Group ===
+        group_radar = QGroupBox("Radar Parameters")
+        gr_layout = QVBoxLayout()
+
+        gr_layout.addWidget(self.label_site_elev)
+        gr_layout.addWidget(self.spin_site_elev)
+
+        gr_layout.addWidget(self.label_mast_height)
+        gr_layout.addWidget(self.spin_mast_height)
+
+        gr_layout.addWidget(self.label_antenna_height)
+        gr_layout.addWidget(self.spin_antenna_height)
+
+        gr_layout.addWidget(self.label_max_range)
+        gr_layout.addWidget(self.spin_max_range)
+
+        # K-factor layout
+        k_layout = QHBoxLayout()
+        k_layout.addWidget(self.label_k_factor)
+        k_layout.addWidget(self.slider_k_factor)
+        k_layout.addWidget(self.label_k_value)
+        gr_layout.addLayout(k_layout)
+
+        # Diffraction guard layout
+        diff_layout = QHBoxLayout()
+        diff_layout.addWidget(self.label_diffraction)
+        diff_layout.addWidget(self.slider_diffraction)
+        diff_layout.addWidget(self.label_diffraction_value)
+        gr_layout.addLayout(diff_layout)
+
+        group_radar.setLayout(gr_layout)
+        layout.addWidget(group_radar)
+
+        # === Height Bands Group ===
+        group_heights = QGroupBox("Target Flight Heights")
+        gh_layout = QVBoxLayout()
+        gh_layout.addWidget(self.label_heights)
+        gh_layout.addWidget(self.table_heights)
+        group_heights.setLayout(gh_layout)
+        layout.addWidget(group_heights)
+
+        # === DEM Source Group ===
+        group_dem = QGroupBox("DEM File")
+        gd_layout = QVBoxLayout()
+        dem_row = QHBoxLayout()
+        dem_row.addWidget(self.line_dem)
+        dem_row.addWidget(self.btn_load_dem)
+        gd_layout.addLayout(dem_row)
+        group_dem.setLayout(gd_layout)
+        layout.addWidget(group_dem)
+
+        # === Obstructions CSV Group ===
+        group_obs = QGroupBox("Obstructions")
+        go_layout = QVBoxLayout()
+        obs_row = QHBoxLayout()
+        obs_row.addWidget(self.line_obstructions)
+        obs_row.addWidget(self.btn_load_obstructions)
+        go_layout.addLayout(obs_row)
+        group_obs.setLayout(go_layout)
+        layout.addWidget(group_obs)
+
+        # === Compute and Status ===
+        layout.addWidget(self.btn_compute)
+        layout.addWidget(self.label_computing)
+
+        # === Export Buttons ===
+        layout.addWidget(self.btn_export_geojson)
+        layout.addWidget(self.btn_export_png)
+
+        layout.addStretch()
+
+    def _connect_signals(self):
+        """Connect internal signals (K-factor and diffraction sliders)."""
+        self.slider_k_factor.valueChanged.connect(self._on_k_factor_changed)
+        self.slider_diffraction.valueChanged.connect(self._on_diffraction_changed)
+
+    def _on_k_factor_changed(self, value):
+        """Update K-factor display."""
+        k = value / 100.0
+        self.label_k_value.setText(f"{k:.3f}")
+
+    def _on_diffraction_changed(self, value):
+        """Update diffraction guard display."""
+        angle = value * 0.1
+        self.label_diffraction_value.setText(f"{angle:.1f}°")
+
+    def _on_load_dem_clicked(self):
+        """Open DEM file dialog."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load DEM File", "",
+            "GeoTIFF (*.tif *.tiff);;All Files (*)"
+        )
+        if path:
+            self.set_dem_path(path)
+
+    def _on_load_obstructions_clicked(self):
+        """Open obstructions CSV file dialog."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Obstructions CSV", "",
+            "CSV (*.csv);;All Files (*)"
+        )
+        if path:
+            self.set_obstructions_path(path)
+
+    def _on_compute_clicked(self):
+        """Handle compute button: gather parameters and emit signal."""
+        if self.is_computing:
+            return
+
+        # Gather parameters
+        site_elev = self.spin_site_elev.value()
+        request = ComputationRequest(
+            radar_lat=self.spin_lat.value(),
+            radar_lon=self.spin_lon.value(),
+            site_elevation_amsl_m=float(site_elev),
+            antenna_amsl_m=float(site_elev + self.spin_mast_height.value() + self.spin_antenna_height.value()),
+            k_factor=self.slider_k_factor.value() / 100.0,
+            max_range_km=self.spin_max_range.value(),
+            height_bands_m=self._get_selected_height_bands(),
+            diffraction_guard_deg=self.slider_diffraction.value() * 0.1,
+            dem_path=self.dem_path,
+            obstructions_path=self.obstructions_path,
+        )
+
+        # Update UI state
+        self.is_computing = True
+        self.btn_compute.setEnabled(False)
+        self.label_computing.setText("Computing...")
+
+        # Emit signal
+        self.compute_requested.emit(request)
+
+    def _on_export_geojson_clicked(self):
+        """Emit export GeoJSON signal."""
+        self.export_geojson_requested.emit()
+
+    def _on_export_png_clicked(self):
+        """Emit export PNG signal."""
+        # For now, just acknowledge
+        self.label_computing.setText("PNG export not yet implemented")
+        QTimer.singleShot(2000, lambda: self.label_computing.setText("Ready"))
+
+    def set_dem_path(self, path: str):
+        """Set DEM path and update UI."""
+        self.dem_path = path
+        self.line_dem.setText(path)
+
+    def set_obstructions_path(self, path: str):
+        """Set obstructions path and update UI."""
+        self.obstructions_path = path
+        self.line_obstructions.setText(path)
+
+    def _get_selected_height_bands(self) -> list[float]:
+        """Get list of selected height bands from table."""
+        heights = []
+        for row in range(self.table_heights.rowCount()):
+            checkbox = self.table_heights.cellWidget(row, 0)
+            if checkbox.isChecked():
+                height_text = self.table_heights.item(row, 1).text()
+                heights.append(float(height_text))
+        return heights
+
+    def set_computing_finished(self):
+        """Called by main window when computation finishes."""
+        self.is_computing = False
+        self.btn_compute.setEnabled(True)
+        self.label_computing.setText("Ready")
+
+
