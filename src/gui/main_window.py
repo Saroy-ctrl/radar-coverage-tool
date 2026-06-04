@@ -479,6 +479,8 @@ class MainWindow(QMainWindow):
         self.control_panel.load_dem_requested.connect(self._on_load_dem)
         self.control_panel.load_obstructions_requested.connect(self._on_load_obstructions)
         self.control_panel.export_geojson_requested.connect(self._on_export_geojson)
+        self.control_panel.coverage_opacity_changed.connect(self.map_view.set_coverage_opacity)
+        self.control_panel.shadow_opacity_changed.connect(self.map_view.set_shadow_opacity)
 
     def _create_menu_bar(self):
         """Create menu bar with File and View menus."""
