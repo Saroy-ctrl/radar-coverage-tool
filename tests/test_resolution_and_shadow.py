@@ -59,3 +59,114 @@ def test_shadow_data_payload_structure():
     assert isinstance(payload["azimuth_step_deg"], float)
     assert isinstance(payload["max_range_m"], float)
     assert all(r >= 0 for r in payload["ranges_m"])
+
+
+import numpy as np
+from unittest.mock import patch
+
+
+def _make_map_view():
+    """Return a MapView instance suitable for unit-testing pure methods.
+
+    conftest.py stubs out all PyQt6 modules with MagicMock when real Qt DLLs
+    are unavailable.  When that happens, `class MapView(QWidget)` resolves to
+    a MagicMock subclass and every method becomes an auto-mock.
+
+    Strategy:
+    1. Replace the MagicMock stubs for the Qt classes that map_view.py
+       references at import time with real (no-op) Python classes so that
+       `class MapView(QWidget): ...` produces a genuine Python type.
+    2. Load map_view.py via importlib.util under a private module name so we
+       get the real source regardless of what is cached in sys.modules.
+    3. Bypass MapView.__init__ with object.__new__ — _build_shadow_features
+       is a pure computation method that needs no instance state.
+    """
+    import os
+    import sys
+    import importlib.util
+    from unittest.mock import MagicMock
+
+    # --- 1. Ensure Qt stub classes are real types, not MagicMocks ----------
+    # Only patch inside the already-installed stubs; if real Qt is present,
+    # this block is a no-op (real classes are already there).
+    _real_class = type('_QtStub', (), {'__init__': lambda self, *a, **k: None})
+
+    def _ensure_real(mod_name, attr_name):
+        mod = sys.modules.get(mod_name)
+        if mod is not None and isinstance(getattr(mod, attr_name, None), MagicMock):
+            setattr(mod, attr_name, _real_class)
+
+    for _mod, _cls in [
+        ('PyQt6.QtWidgets',         'QWidget'),
+        ('PyQt6.QtWidgets',         'QVBoxLayout'),
+        ('PyQt6.QtWebEngineWidgets','QWebEngineView'),
+        ('PyQt6.QtWebEngineCore',   'QWebEngineSettings'),
+        ('PyQt6.QtCore',            'QUrl'),
+    ]:
+        _ensure_real(_mod, _cls)
+
+    # --- 2. Load the real map_view source into an isolated module ----------
+    map_view_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), '..', 'src', 'gui', 'map_view.py')
+    )
+    spec = importlib.util.spec_from_file_location('_map_view_testonly', map_view_path)
+    mv_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mv_mod)
+
+    RealMapView = mv_mod.MapView
+
+    # --- 3. Bypass __init__ — pure method, no Qt state needed --------------
+    return object.__new__(RealMapView)
+
+
+def test_build_shadow_features_full_coverage_no_shadow():
+    """When every azimuth reaches max range, no shadow features should be produced."""
+    mv = _make_map_view()
+    max_r = 100_000.0
+    ranges_m = [max_r] * 180          # all azimuths at full range
+    feats = mv._build_shadow_features(
+        ant_lat=51.5, ant_lon=0.0,
+        ranges_m=ranges_m,
+        azimuth_step_deg=2.0,
+        max_range_m=max_r,
+    )
+    assert feats == [], f"Expected no shadow features, got {len(feats)}"
+
+
+def test_build_shadow_features_fully_blocked_returns_features():
+    """When all azimuths are blocked at min range, features should be produced for every azimuth."""
+    mv = _make_map_view()
+    max_r = 100_000.0
+    min_r = 200.0   # RANGE_STEP_M minimum
+    ranges_m = [min_r] * 180
+    feats = mv._build_shadow_features(
+        ant_lat=51.5, ant_lon=0.0,
+        ranges_m=ranges_m,
+        azimuth_step_deg=2.0,
+        max_range_m=max_r,
+    )
+    assert len(feats) == 180
+    for f in feats:
+        assert "latlngs" in f
+        assert len(f["latlngs"]) == 4
+
+
+def test_build_shadow_features_latlngs_are_floats():
+    """Each wedge latlngs should be [[lat, lon], ...] with float values."""
+    mv = _make_map_view()
+    ranges_m = [50_000.0] * 360
+    feats = mv._build_shadow_features(
+        ant_lat=51.5, ant_lon=0.0,
+        ranges_m=ranges_m,
+        azimuth_step_deg=1.0,
+        max_range_m=100_000.0,
+    )
+    assert len(feats) > 0
+    for f in feats:
+        for coord in f["latlngs"]:
+            assert len(coord) == 2
+            lat, lon = coord
+            assert isinstance(lat, float)
+            assert isinstance(lon, float)
+            assert -90 <= lat <= 90
+            assert -180 <= lon <= 180

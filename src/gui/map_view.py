@@ -45,6 +45,7 @@ class MapView(QWidget):
         self.radar_lat = 51.5
         self.radar_lon = 0.0
         self.coverage_data = {}
+        self._shadow_features = []      # pre-built wedge list, rebuilt on set_shadow_data
 
         # Fixed temp file path — overwritten cleanly each render
         self._tmp_path = Path(tempfile.gettempdir()) / "radar_map_view.html"
@@ -78,14 +79,17 @@ class MapView(QWidget):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _render_map(self, lat: float, lon: float, coverage_features: list):
+    def _render_map(self, lat: float, lon: float,
+                    coverage_features: list, shadow_features: list = None):
         """
         Write a fresh Leaflet HTML file and load it in the WebEngine.
+        Shadow features are rendered first (underneath coverage polygons).
 
         Uses Path.write_text() (not a reused file handle) so the old HTML
         is always fully replaced — no stale-content / seek-without-truncate bugs.
         """
-        html = self._generate_leaflet_html(lat, lon, coverage_features)
+        html = self._generate_leaflet_html(lat, lon, coverage_features,
+                                           shadow_features or [])
         self._tmp_path.write_text(html, encoding="utf-8")
 
         # Navigate to about:blank first to force a full reload of the local file
@@ -154,8 +158,64 @@ class MapView(QWidget):
         features.sort(key=lambda f: f["height_m"], reverse=True)
         return features
 
+    def _build_shadow_features(
+        self,
+        ant_lat: float,
+        ant_lon: float,
+        ranges_m: list,
+        azimuth_step_deg: float,
+        max_range_m: float,
+    ) -> list:
+        """
+        Build dark-red shadow wedge polygons for terrain-blocked zones.
+
+        For each azimuth, the shadow spans from the max visible range
+        (coverage boundary) to max_range_m. Each wedge is a 4-point
+        geodetic polygon one azimuth-step wide.
+
+        Args:
+            ant_lat, ant_lon: antenna WGS84 position
+            ranges_m:         per-azimuth max visible range (lowest height band)
+            azimuth_step_deg: azimuth resolution used in this run
+            max_range_m:      instrumented range limit
+
+        Returns:
+            list of {"latlngs": [[lat, lon], ...]} dicts (4 points each)
+        """
+        from pyproj import Geod
+        GEOD = Geod(ellps='WGS84')
+        half = azimuth_step_deg / 2.0
+        features = []
+
+        for i, inner_r in enumerate(ranges_m):
+            outer_r = max_range_m
+            if inner_r >= outer_r:
+                continue   # no shadow: fully visible to max range
+
+            az = i * azimuth_step_deg
+            az_left  = az - half
+            az_right = az + half
+
+            # 4 corners of the wedge: inner-left, outer-left, outer-right, inner-right
+            corners_az = [az_left,  az_left,  az_right, az_right]
+            corners_r  = [inner_r,  outer_r,  outer_r,  inner_r]
+
+            lons, lats, _ = GEOD.fwd(
+                [ant_lon] * 4,
+                [ant_lat] * 4,
+                corners_az,
+                corners_r,
+            )
+            features.append({
+                "latlngs": [[float(lat), float(lon)]
+                            for lat, lon in zip(lats, lons)]
+            })
+
+        return features
+
     def _generate_leaflet_html(self, lat: float, lon: float,
-                               coverage_features: list) -> str:
+                               coverage_features: list,
+                               shadow_features: list = None) -> str:
         """
         Generate a standalone HTML page with Leaflet + coverage polygons.
 
@@ -166,7 +226,21 @@ class MapView(QWidget):
         Args:
             lat, lon: map centre / antenna location
             coverage_features: list of feature dicts from _build_coverage_features()
+            shadow_features: list of {"latlngs": [[lat, lon], ...]} dicts
         """
+        # Shadow polygons (rendered first — underneath coverage)
+        shadow_blocks = []
+        for sfeat in (shadow_features or []):
+            slatlngs_json = json.dumps(sfeat["latlngs"], separators=(',', ':'))
+            shadow_blocks.append(f"""\
+L.polygon({slatlngs_json}, {{
+    color: '#8b0000',
+    fillColor: '#8b0000',
+    weight: 0,
+    opacity: 0,
+    fillOpacity: 0.55
+}}).addTo(map);""")
+
         # Build JavaScript for each polygon
         polygon_blocks = []
         for feat in coverage_features:
@@ -191,6 +265,7 @@ L.polygon({latlngs_json}, {{
     fillOpacity: {opacity}
 }}).bindTooltip('{tooltip}', {{sticky: true}}).addTo(map);""")
 
+        shadows_js  = "\n        ".join(shadow_blocks)
         polygons_js = "\n        ".join(polygon_blocks)
 
         # Legend entries
@@ -266,6 +341,9 @@ L.polygon({latlngs_json}, {{
       '<b>Radar Antenna</b><br>Lat: {lat:.4f}&deg;<br>Lon: {lon:.4f}&deg;'
     ).addTo(map);
 
+    // ── shadow (terrain-blocked) zones ─────────────────────────────────
+    {shadows_js}
+
     // ── coverage polygons ───────────────────────────────────────────────
     {polygons_js}
   </script>
@@ -285,11 +363,11 @@ L.polygon({latlngs_json}, {{
         """
         self.coverage_data = coverage_data
         features = self._build_coverage_features(coverage_data)
-        self._render_map(self.radar_lat, self.radar_lon, features)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
 
     def set_antenna_location(self, lat: float, lon: float):
         """
-        Update antenna location marker.
+        Update antenna location marker, preserving existing coverage and shadow.
 
         Preserves existing coverage so the map isn't wiped when the window
         pans to the antenna before computation finishes.
@@ -297,7 +375,26 @@ L.polygon({latlngs_json}, {{
         self.radar_lat = lat
         self.radar_lon = lon
         features = self._build_coverage_features(self.coverage_data)
-        self._render_map(lat, lon, features)
+        self._render_map(lat, lon, features, self._shadow_features)
+
+    def set_shadow_data(self, ant_lat: float, ant_lon: float, payload: dict):
+        """
+        Rebuild and store shadow wedge features, then re-render the map.
+
+        Args:
+            ant_lat, ant_lon: antenna WGS84 position
+            payload: {"ranges_m": list, "azimuth_step_deg": float, "max_range_m": float}
+        """
+        self._shadow_features = self._build_shadow_features(
+            ant_lat=ant_lat,
+            ant_lon=ant_lon,
+            ranges_m=payload["ranges_m"],
+            azimuth_step_deg=payload["azimuth_step_deg"],
+            max_range_m=payload["max_range_m"],
+        )
+        # Re-render map with current coverage + new shadow
+        features = self._build_coverage_features(self.coverage_data)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
 
     def set_dem_bounds(self, bounds: dict):
         """
