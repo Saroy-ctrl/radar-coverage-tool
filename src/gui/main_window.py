@@ -44,6 +44,8 @@ class ComputationWorker(QThread):
     polar_data_ready = pyqtSignal(dict)  # Polar plot data
     error_occurred = pyqtSignal(str)  # Error message
     computation_finished = pyqtSignal()
+    shadow_data_ready = pyqtSignal(dict)    # blocking range per azimuth for lowest height band
+    computation_timed = pyqtSignal(float)   # elapsed wall-clock seconds for this run
 
     def __init__(self, request: ComputationRequest):
         super().__init__()
@@ -53,6 +55,7 @@ class ComputationWorker(QThread):
     def run(self):
         """Execute computation in background thread using real backend engines."""
         try:
+            import time as _time
             import numpy as np
             import rasterio
             from pyproj import Geod
@@ -139,8 +142,8 @@ class ComputationWorker(QThread):
             # very first bin is already at range>0, which can produce a spurious
             # blocking angle and collapse coverage to a uniform circle.
             # ---------------------------------------------------------------
-            RANGE_STEP_M = 200.0
-            AZIMUTH_STEP = 2  # degrees
+            RANGE_STEP_M = req.range_step_m
+            AZIMUTH_STEP = req.azimuth_step_deg
 
             azimuths = np.arange(0, 360, AZIMUTH_STEP, dtype=np.float64)
             n_az = len(azimuths)
@@ -157,6 +160,7 @@ class ComputationWorker(QThread):
             horizon_angles_deg = np.zeros(n_az, dtype=np.float64)
 
             self.progress_update.emit("Computing coverage (this may take a minute)...")
+            _t_start = _time.monotonic()
 
             for i, az in enumerate(azimuths):
                 # Forward geodetic: all range bins at once
@@ -231,7 +235,20 @@ class ComputationWorker(QThread):
                     pct = int(i / n_az * 100)
                     self.progress_update.emit(f"Computing... {pct}%")
 
+            _elapsed = _time.monotonic() - _t_start
+
             self.progress_update.emit("Building coverage polygons...")
+            self.computation_timed.emit(_elapsed)
+
+            # Shadow data: lowest enabled height band, raw ranges in metres
+            if heights_agl:
+                _lowest_h = min(heights_agl)
+                shadow_payload = {
+                    "ranges_m": coverage_ranges_m[_lowest_h].tolist(),
+                    "azimuth_step_deg": float(AZIMUTH_STEP),
+                    "max_range_m": float(max_range_m),
+                }
+                self.shadow_data_ready.emit(shadow_payload)
 
             # Polar data: ranges in km
             polar_ranges = {}

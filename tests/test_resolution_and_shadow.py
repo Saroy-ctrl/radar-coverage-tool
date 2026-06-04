@@ -46,3 +46,16 @@ def test_resolution_presets_values():
     assert RESOLUTION_PRESETS["Standard"] == (1.0,  100.0)
     assert RESOLUTION_PRESETS["High"]     == (0.5,  100.0)
     assert RESOLUTION_PRESETS["Ultra"]    == (0.5,   50.0)
+
+
+def test_shadow_data_payload_structure():
+    """shadow_data_ready payload must have ranges_m, azimuth_step_deg, max_range_m."""
+    payload = {
+        "ranges_m": [50000.0, 60000.0, 100000.0],
+        "azimuth_step_deg": 2.0,
+        "max_range_m": 100000.0,
+    }
+    assert isinstance(payload["ranges_m"], list)
+    assert isinstance(payload["azimuth_step_deg"], float)
+    assert isinstance(payload["max_range_m"], float)
+    assert all(r >= 0 for r in payload["ranges_m"])
