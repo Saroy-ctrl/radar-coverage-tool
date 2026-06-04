@@ -3,8 +3,9 @@
 ## Goal
 
 Replace the visually noisy filled shadow wedges on the Leaflet map with thin radial lines,
-and add concentric range rings with labels. The result should match the clean style of the
-Cambridge Pixel SPx reference tool.
+add concentric range rings with labels, and add two live opacity sliders (one for coverage
+polygons, one for shadow lines). The result should match the clean style of the Cambridge
+Pixel SPx reference tool.
 
 ---
 
@@ -18,12 +19,17 @@ Current rendering has two issues:
 
 2. **No range rings** — the map has no spatial reference grid, making it hard to read distances.
 
+3. **No opacity controls** — coverage and shadow visibility are hardcoded; there is no way
+   to tune them without recomputing.
+
 ---
 
 ## Scope
 
-All changes confined to `src/gui/map_view.py`. No changes to the worker, control panel,
-physics engines, or signal wiring.
+Primary changes in `src/gui/map_view.py`. The opacity sliders also touch
+`src/gui/control_panel.py` (two new sliders + two new signals) and
+`src/gui/main_window.py` (two new signal connections). No changes to the worker,
+physics engines, or ComputationRequest.
 
 ---
 
@@ -90,12 +96,48 @@ They render whenever `self._max_range_m > 0` (i.e., after the first computation)
 
 ---
 
+### 3. Opacity sliders
+
+**ControlPanel — two new sliders in a new "Display" group** (placed after "Computation
+Resolution", before "Target Flight Heights"):
+
+| Slider | Range | Default | Signal emitted |
+|--------|-------|---------|----------------|
+| Coverage opacity | 0–100 | 100 | `coverage_opacity_changed(float)` — value 0.0–1.0 |
+| Shadow opacity | 0–100 | 50 | `shadow_opacity_changed(float)` — value 0.0–1.0 |
+
+Both sliders emit their signal immediately on every value change (no Compute needed).
+Displayed as `QSlider(Horizontal)` with a `QLabel` showing the current `%` value.
+
+**MapView — two new instance variables:**
+- `self._coverage_opacity_factor = 1.0` — multiplier applied to each band's base opacity
+- `self._shadow_opacity = 0.5` — absolute opacity for shadow polylines
+
+**MapView — two new public methods:**
+- `set_coverage_opacity(factor: float)` — updates `_coverage_opacity_factor`, calls `_render_map()`
+- `set_shadow_opacity(opacity: float)` — updates `_shadow_opacity`, calls `_render_map()`
+
+**Rendering:**
+
+Coverage polygons: `actual_opacity = band_base_opacity × self._coverage_opacity_factor`
+(preserves relative differences between height bands at every slider position).
+
+Shadow polylines: use `self._shadow_opacity` directly for the `opacity` property.
+
+**MainWindow — two new connections** in `_create_layout()`:
+```python
+self.control_panel.coverage_opacity_changed.connect(self.map_view.set_coverage_opacity)
+self.control_panel.shadow_opacity_changed.connect(self.map_view.set_shadow_opacity)
+```
+
+---
+
 ## What Does NOT Change
 
 - Signal wiring (`shadow_data_ready`, `computation_timed`, etc.)
 - `_build_coverage_features()` — coverage polygons unchanged
 - `set_shadow_data()` public signature — same dict format
-- Physics engines, worker, control panel
+- Physics engines, worker, ComputationRequest
 - CLAUDE.md shadow color convention (`#8b0000`) — updated to `#cc2200` (brighter red,
   readable at `weight:1`)
 
@@ -110,6 +152,9 @@ Manual verification:
 4. Confirm range rings appear at correct intervals after first computation
 5. Confirm labels are readable and positioned at east side of each ring
 6. Confirm map still shows coverage polygons clearly on top
+7. Drag coverage opacity slider to 0% — polygons disappear; to 50% — all bands at half opacity
+8. Drag shadow opacity slider to 0% — shadow lines disappear; to 100% — fully opaque lines
+9. Confirm sliders take effect instantly without recomputing
 
 No new automated tests required — this is purely a rendering change with no
 algorithmic logic.
