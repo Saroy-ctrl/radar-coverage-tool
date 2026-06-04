@@ -209,6 +209,57 @@ class MapView(QWidget):
 
         return features
 
+    def _generate_range_rings_js(self, lat: float, lon: float, max_range_m: float) -> str:
+        """
+        Generate Leaflet JS for concentric range rings with distance labels.
+
+        Auto-selects ring interval based on max_range_m:
+            <= 25 km →  5 km
+            <= 50 km → 10 km
+            <=100 km → 20 km
+            > 100 km → 50 km
+
+        Labels placed at east point of each ring (computed via pyproj Geod.fwd).
+        """
+        if max_range_m <= 0:
+            return ""
+
+        from pyproj import Geod
+        geod = Geod(ellps='WGS84')
+
+        if max_range_m <= 25_000:
+            interval_m = 5_000
+        elif max_range_m <= 50_000:
+            interval_m = 10_000
+        elif max_range_m <= 100_000:
+            interval_m = 20_000
+        else:
+            interval_m = 50_000
+
+        blocks = []
+        r = interval_m
+        while r <= max_range_m:
+            lon_e, lat_e, _ = geod.fwd(lon, lat, 90, r)
+            label = f"{r / 1000:.0f} km" if r >= 1000 else f"{r:.0f} m"
+            blocks.append(f"""L.circle([{lat:.6f}, {lon:.6f}], {{
+    radius: {r:.0f},
+    color: 'rgba(255,255,255,0.22)',
+    weight: 1,
+    fill: false,
+    interactive: false
+}}).addTo(map);
+L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
+    icon: L.divIcon({{
+        className: '',
+        html: '<span style="color:rgba(255,255,255,0.6);font-size:10px;font-family:sans-serif;white-space:nowrap;text-shadow:0 0 3px #000">{label}</span>',
+        iconAnchor: [0, 8]
+    }}),
+    interactive: false
+}}).addTo(map);""")
+            r += interval_m
+
+        return "\n".join(blocks)
+
     def _generate_leaflet_html(self, lat: float, lon: float,
                                coverage_features: list,
                                shadow_features: list = None) -> str:
@@ -274,6 +325,8 @@ L.polygon({latlngs_json}, {{
                 f'<span>{h:.0f}m AGL</span></div>'
             )
         legend_html = "\n".join(legend_rows) if legend_rows else ""
+
+        range_rings_js = self._generate_range_rings_js(lat, lon, self._max_range_m)
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -341,6 +394,9 @@ L.polygon({latlngs_json}, {{
 
     // ── coverage polygons ───────────────────────────────────────────────
     {polygons_js}
+
+    // ── range rings ──────────────────────────────────────────────────────
+    {range_rings_js}
   </script>
 </body>
 </html>"""
@@ -387,6 +443,7 @@ L.polygon({latlngs_json}, {{
             azimuth_step_deg=payload["azimuth_step_deg"],
             max_range_m=payload["max_range_m"],
         )
+        self._max_range_m = payload["max_range_m"]
         # Re-render map with current coverage + new shadow
         features = self._build_coverage_features(self.coverage_data)
         self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)

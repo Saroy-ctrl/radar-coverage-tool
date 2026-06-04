@@ -200,3 +200,34 @@ def test_shadow_rendered_as_polyline_not_polygon():
 
     assert "L.polyline" in html
     assert "L.polygon" not in html
+
+
+def test_range_ring_interval_selection():
+    """Auto-interval must match the spec table."""
+    mv = _make_map_view()
+    mv._coverage_opacity_factor = 1.0
+    mv._shadow_opacity = 0.5
+    mv._max_range_m = 0.0
+
+    cases = [
+        (25_000.0,   5_000.0),
+        (50_000.0,  10_000.0),
+        (100_000.0, 20_000.0),
+        (200_000.0, 50_000.0),
+    ]
+    for max_r, expected_interval in cases:
+        js = mv._generate_range_rings_js(51.5, 0.0, max_r)
+        assert f"radius: {expected_interval:.0f}" in js, (
+            f"max_range={max_r}: expected interval {expected_interval}, got js[:200]={js[:200]}"
+        )
+
+
+def test_range_ring_js_empty_when_no_range():
+    """Returns empty string when max_range_m is 0."""
+    mv = _make_map_view()
+    mv._coverage_opacity_factor = 1.0
+    mv._shadow_opacity = 0.5
+    mv._max_range_m = 0.0
+
+    js = mv._generate_range_rings_js(51.5, 0.0, 0.0)
+    assert js == ""
