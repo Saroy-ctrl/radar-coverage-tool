@@ -24,10 +24,10 @@ from PyQt6.QtCore import QUrl
 # Height band colors (Cambridge Pixel convention)
 HEIGHT_BAND_COLORS = {
     50:   {"color": "#00cc44", "opacity": 0.45},
-    100:  {"color": "#aacc00", "opacity": 0.40},
-    500:  {"color": "#ff8800", "opacity": 0.40},
-    1000: {"color": "#ff3300", "opacity": 0.35},
-    3000: {"color": "#cc00ff", "opacity": 0.30},
+    100:  {"color": "#aacc00", "opacity": 0.38},
+    500:  {"color": "#ff8800", "opacity": 0.32},
+    1000: {"color": "#ff3300", "opacity": 0.22},
+    3000: {"color": "#cc00ff", "opacity": 0.15},
 }
 DEFAULT_COLOR = {"color": "#4a9eff", "opacity": 0.40}
 
@@ -281,7 +281,7 @@ L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
             slatlngs_json = json.dumps(sfeat["latlngs"], separators=(',', ':'))
             shadow_blocks.append(f"""\
 L.polyline({slatlngs_json}, {{
-    color: '#cc2200',
+    color: '#ff2200',
     weight: 1,
     opacity: {self._shadow_opacity},
     interactive: false
