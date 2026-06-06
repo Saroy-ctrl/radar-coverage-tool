@@ -7,7 +7,7 @@ handling of edge cases (clamping, single-bin advancement, multi-run scenarios).
 
 import numpy as np
 import pytest
-from src.shadow_builder import extract_blocked_segments
+from src.shadow_builder import extract_blocked_segments, build_merged_shadow_geojson
 
 
 def test_flat_terrain_no_segments():
@@ -82,3 +82,43 @@ def test_inner_r_clamped_to_minimum():
     assert inner_r == 200.0
     # outer_r = ranges[5] = 250 m
     assert outer_r == pytest.approx(250.0)
+
+
+# Tenerife-like antenna for geodetic tests
+ANT_LAT = 28.2724
+ANT_LON = -16.6425
+
+
+def test_empty_segments_returns_empty_fc():
+    fc = build_merged_shadow_geojson(ANT_LAT, ANT_LON, [], azimuth_step_deg=2.0)
+    assert fc["type"] == "FeatureCollection"
+    assert fc["features"] == []
+
+
+def test_single_segment_produces_one_feature():
+    segs = [(90.0, 5_000.0, 20_000.0)]
+    fc = build_merged_shadow_geojson(ANT_LAT, ANT_LON, segs, azimuth_step_deg=2.0)
+    assert len(fc["features"]) == 1
+    geom = fc["features"][0]["geometry"]
+    assert geom["type"] in ("Polygon", "MultiPolygon")
+
+
+def test_adjacent_same_range_merges_to_fewer_features():
+    """
+    10 consecutive azimuth bins all blocked in the same range band
+    should merge into a single Polygon (not 10 separate features).
+    """
+    segs = [(float(az), 10_000.0, 30_000.0) for az in range(0, 20, 2)]  # 10 bins
+    fc = build_merged_shadow_geojson(ANT_LAT, ANT_LON, segs, azimuth_step_deg=2.0)
+    # After union we expect exactly 1 Polygon or 1 MultiPolygon with 1 geom
+    assert len(fc["features"]) == 1
+    geom_type = fc["features"][0]["geometry"]["type"]
+    assert geom_type in ("Polygon", "MultiPolygon")
+
+
+def test_two_separated_bands_remain_separate():
+    """Segments at az=0° and az=180° (opposite sides) must NOT merge."""
+    segs = [(0.0, 5_000.0, 15_000.0), (180.0, 5_000.0, 15_000.0)]
+    fc = build_merged_shadow_geojson(ANT_LAT, ANT_LON, segs, azimuth_step_deg=2.0)
+    geom = fc["features"][0]["geometry"]
+    assert geom["type"] == "MultiPolygon"
