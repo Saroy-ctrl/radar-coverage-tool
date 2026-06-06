@@ -216,8 +216,8 @@ class ControlPanel(QWidget):
         self.label_shadow_opacity = QLabel("Shadow opacity:")
         self.slider_shadow_opacity = QSlider(Qt.Orientation.Horizontal)
         self.slider_shadow_opacity.setRange(0, 100)
-        self.slider_shadow_opacity.setValue(50)
-        self.label_shadow_opacity_val = QLabel("50%")
+        self.slider_shadow_opacity.setValue(55)
+        self.label_shadow_opacity_val = QLabel("55%")
         self.label_shadow_opacity_val.setMinimumWidth(38)
 
     def _populate_height_bands_table(self):

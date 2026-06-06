@@ -293,7 +293,7 @@ L.polygon({slatlngs_json}, {{
     color: '#8b0000',
     fillColor: '#8b0000',
     weight: 0,
-    fillOpacity: {round(self._shadow_opacity * 0.55, 4)},
+    fillOpacity: {round(self._shadow_opacity, 4)},
     interactive: false
 }}).addTo(map);""")
 
