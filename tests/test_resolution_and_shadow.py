@@ -194,6 +194,8 @@ def test_shadow_rendered_as_polyline_not_polygon():
     mv._coverage_opacity_factor = 1.0
     mv._shadow_opacity = 0.5
     mv._max_range_m = 0.0
+    mv._shadow_mode = "Wedge"
+    mv._shadow_geojson = None
 
     shadow_feats = [{"latlngs": [[51.6, 0.1], [51.8, 0.3]]}]
     html = mv._generate_leaflet_html(51.5, 0.0, [], shadow_feats)
@@ -239,6 +241,8 @@ def test_coverage_opacity_factor_applied_in_html():
     mv._shadow_opacity = 0.5
     mv._max_range_m = 0.0
     mv._coverage_opacity_factor = 0.5   # half opacity
+    mv._shadow_mode = "Wedge"
+    mv._shadow_geojson = None
 
     # 50m AGL band has base opacity 0.45 → expected 0.45 * 0.5 = 0.225
     feats = [{"height_m": 50.0, "area_km2": 100.0,
@@ -254,6 +258,8 @@ def test_set_coverage_opacity_updates_factor():
     mv._shadow_opacity = 0.5
     mv._max_range_m = 0.0
     mv._shadow_features = []
+    mv._shadow_mode = "Wedge"
+    mv._shadow_geojson = None
     mv.coverage_data = {}
     mv.radar_lat = 51.5
     mv.radar_lon = 0.0
@@ -270,6 +276,8 @@ def test_set_shadow_opacity_updates_value():
     mv._coverage_opacity_factor = 1.0
     mv._max_range_m = 0.0
     mv._shadow_features = []
+    mv._shadow_mode = "Wedge"
+    mv._shadow_geojson = None
     mv.coverage_data = {}
     mv.radar_lat = 51.5
     mv.radar_lon = 0.0
