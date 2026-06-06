@@ -529,6 +529,8 @@ L.polygon({latlngs_json}, {{
                 self._shadow_segments_cache,
                 self._shadow_az_step_cache,
             )
+        else:
+            self._shadow_geojson = None
         features = self._build_coverage_features(self.coverage_data)
         self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
 
