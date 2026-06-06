@@ -25,6 +25,7 @@ from src.gui.control_panel import ControlPanel, ComputationRequest
 from src.gui.map_view import MapView
 from src.gui.polar_view import PolarView
 from src.shadow_builder import extract_blocked_segments
+from src.dem_preprocessor import fill_voids
 
 
 # Dark theme colors
@@ -47,6 +48,7 @@ class ComputationWorker(QThread):
     computation_finished = pyqtSignal()
     shadow_data_ready = pyqtSignal(dict)    # blocking range per azimuth for lowest height band
     computation_timed = pyqtSignal(float)   # elapsed wall-clock seconds for this run
+    void_pct_ready = pyqtSignal(float)      # void fill percentage after DEM preprocessing
 
     def __init__(self, request: ComputationRequest):
         super().__init__()
@@ -73,19 +75,25 @@ class ComputationWorker(QThread):
 
             self.progress_update.emit("Loading DEM...")
 
-            # Load DEM into memory (float64, nodata → 0)
+            # Load DEM into memory (float64, nodata → fill_voids sentinel)
             with rasterio.open(req.dem_path) as src:
-                dem_data = src.read(1).astype(np.float64)
+                raw_data  = src.read(1).astype(np.float64)
                 transform = src.transform
-                nodata = src.nodata
-                dem_bounds = src.bounds   # (left, bottom, right, top)
+                nodata    = src.nodata
+                dem_bounds = src.bounds
 
-            if nodata is not None:
-                dem_data = np.where(dem_data == nodata, 0.0, dem_data)
-            dem_data = np.where((dem_data < -500) | (dem_data > 9000), 0.0, dem_data)
+            # Normalise rasterio nodata sentinel → -32768 so fill_voids detects it
+            if nodata is not None and nodata != -32768:
+                raw_data = np.where(raw_data == nodata, -32768.0, raw_data)
+
+            void_result = fill_voids(raw_data)
+            dem_data    = void_result['filled']
+            void_pct    = void_result['void_fraction'] * 100.0
+            self.void_pct_ready.emit(void_pct)
 
             self.progress_update.emit(
-                f"DEM loaded: {dem_data.shape[1]}×{dem_data.shape[0]} px, "
+                f"DEM loaded: {dem_data.shape[1]}×{dem_data.shape[0]} px  "
+                f"void fill {void_pct:.1f}%  "
                 f"bounds W{dem_bounds.left:.2f} E{dem_bounds.right:.2f} "
                 f"S{dem_bounds.bottom:.2f} N{dem_bounds.top:.2f}"
             )
@@ -586,6 +594,7 @@ class MainWindow(QMainWindow):
         self.computation_worker.computation_finished.connect(self._on_computation_finished)
         self.computation_worker.shadow_data_ready.connect(self._on_shadow_data_ready)
         self.computation_worker.computation_timed.connect(self._on_computation_timed)
+        self.computation_worker.void_pct_ready.connect(self._on_void_pct_ready)
         self.computation_worker.start()
 
     def _on_progress_update(self, message: str):
@@ -634,6 +643,10 @@ class MainWindow(QMainWindow):
     def _on_computation_timed(self, elapsed_seconds: float):
         """Recalibrate control panel estimate label with measured time."""
         self.control_panel.recalibrate_estimate(elapsed_seconds)
+
+    def _on_void_pct_ready(self, pct: float):
+        """Update void fill label in status bar."""
+        self.label_void_pct.setText(f"Void fill: {pct:.1f}%")
 
     def _on_computation_error(self, error_msg: str):
         """Handle computation error."""
