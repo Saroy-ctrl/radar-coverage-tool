@@ -2,10 +2,11 @@
 """
 Shadow geometry builder.
 
-Two public functions:
+Public functions:
   extract_blocked_segments — run-length encode blocked range bins for one azimuth.
-  build_merged_shadow_geojson — merge all segments across all azimuths into smooth
-                                 shapely-union blob polygons, returned as GeoJSON.
+
+Additional geometry builders (e.g. merged GeoJSON, shapely unions) will be added
+in future phases.
 """
 
 import numpy as np
@@ -46,6 +47,9 @@ def extract_blocked_segments(visible_mask, ranges, az_deg):
     for s, e in zip(starts, ends):
         inner_r = max(float(ranges[s + 1]), MIN_INNER_R_M)
         outer_r = float(ranges[e])
+        # Single-bin run: outer_r == ranges[s+1] == inner_r before clamp — advance one step.
+        if outer_r <= inner_r and e + 1 < len(ranges):
+            outer_r = float(ranges[e + 1])
         if outer_r > inner_r:
             result.append((float(az_deg), inner_r, outer_r))
     return result
