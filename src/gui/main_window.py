@@ -156,6 +156,10 @@ class ComputationWorker(QThread):
             heights_agl = req.height_bands_m
             coverage_ranges_m = {h: np.zeros(n_az, dtype=np.float64) for h in heights_agl}
 
+            from src.shadow_builder import extract_blocked_segments
+            _min_h_agl = min(heights_agl) if heights_agl else None
+            all_shadow_segments = []   # list of (az_deg, inner_r_m, outer_r_m)
+
             # Store per-azimuth horizon angles for polar plot
             horizon_angles_deg = np.zeros(n_az, dtype=np.float64)
 
@@ -234,6 +238,10 @@ class ComputationWorker(QThread):
 
                     coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
 
+                    if h_agl == _min_h_agl:
+                        segs = extract_blocked_segments(visible_mask, ranges, az)
+                        all_shadow_segments.extend(segs)
+
                 if i % 20 == 0:
                     pct = int(i / n_az * 100)
                     self.progress_update.emit(f"Computing... {pct}%")
@@ -243,13 +251,16 @@ class ComputationWorker(QThread):
             self.progress_update.emit("Building coverage polygons...")
             self.computation_timed.emit(_elapsed)
 
-            # Shadow data: lowest enabled height band, raw ranges in metres
+            # Shadow data for MapView: both modes use the same payload.
+            # "ranges_m" drives the fast wedge mode.
+            # "shadow_segments" drives the smooth polygon mode.
             if heights_agl:
                 _lowest_h = min(heights_agl)
                 shadow_payload = {
-                    "ranges_m": coverage_ranges_m[_lowest_h].tolist(),
+                    "ranges_m":        coverage_ranges_m[_lowest_h].tolist(),
+                    "shadow_segments": all_shadow_segments,
                     "azimuth_step_deg": float(AZIMUTH_STEP),
-                    "max_range_m": float(max_range_m),
+                    "max_range_m":      float(max_range_m),
                 }
                 self.shadow_data_ready.emit(shadow_payload)
 
