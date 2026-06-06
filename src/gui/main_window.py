@@ -26,6 +26,7 @@ from src.gui.map_view import MapView
 from src.gui.polar_view import PolarView
 from src.shadow_builder import extract_blocked_segments
 from src.dem_preprocessor import fill_voids
+from src.dem_manager import open_mosaic as dem_open_mosaic
 
 
 # Dark theme colors
@@ -75,16 +76,11 @@ class ComputationWorker(QThread):
 
             self.progress_update.emit("Loading DEM...")
 
-            # Load DEM into memory (float64, nodata → fill_voids sentinel)
-            with rasterio.open(req.dem_path) as src:
-                raw_data  = src.read(1).astype(np.float64)
-                transform = src.transform
-                nodata    = src.nodata
-                dem_bounds = src.bounds
-
-            # Normalise rasterio nodata sentinel → -32768 so fill_voids detects it
-            if nodata is not None and nodata != -32768:
-                raw_data = np.where(raw_data == nodata, -32768.0, raw_data)
+            # Load DEM — auto-discovers and mosaics neighbour SRTM tiles if present.
+            # raw_data already float64; nodata normalised to -32768 sentinel by open_mosaic.
+            raw_data, transform, dem_bounds, n_tiles = dem_open_mosaic(
+                req.dem_path, req.radar_lat, req.radar_lon, req.max_range_km
+            )
 
             void_result = fill_voids(raw_data)
             dem_data    = void_result['filled']
@@ -93,7 +89,7 @@ class ComputationWorker(QThread):
 
             self.progress_update.emit(
                 f"DEM loaded: {dem_data.shape[1]}×{dem_data.shape[0]} px  "
-                f"void fill {void_pct:.1f}%  "
+                f"{n_tiles} tile(s)  void fill {void_pct:.1f}%  "
                 f"bounds W{dem_bounds.left:.2f} E{dem_bounds.right:.2f} "
                 f"S{dem_bounds.bottom:.2f} N{dem_bounds.top:.2f}"
             )
