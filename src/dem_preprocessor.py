@@ -237,20 +237,33 @@ def fill_voids(elevation_array, void_mask=None):
             f"High void fraction ({void_frac*100:.2f}%) — DEM quality may be poor"
         )
 
-    # Tier 1: small voids
+    # Tiers 2 & 3 use scipy.griddata which requires holding ALL valid-pixel
+    # coordinates in memory: O(rows × cols × 16 bytes). For a multi-tile mosaic
+    # (e.g. 14400×18000) this exceeds 2 GiB. Skip griddata tiers for large DEMs
+    # and use the sea-level fallback — mosaics are mostly ocean so 0 m is correct.
+    LARGE_DEM_PIXELS = 4_000_000   # ~2×2 SRTM3 tiles; above this, skip griddata
+
+    # Tier 1: small voids (local nanmean — safe for any size)
     filled, void_mask = _fill_small_voids(elevation_array, void_mask, size_threshold=10)
     small_filled = np.sum(original_void_mask & ~void_mask)
     logger.debug(f"Tier 1 (small): {small_filled} voids filled")
 
-    # Tier 2: medium voids
-    filled, void_mask = _fill_medium_voids(filled, void_mask, size_threshold=(10, 100))
-    medium_filled = np.sum(original_void_mask & ~void_mask) - small_filled
-    logger.debug(f"Tier 2 (medium): {medium_filled} voids filled")
+    if elevation_array.size <= LARGE_DEM_PIXELS:
+        # Tier 2: medium voids
+        filled, void_mask = _fill_medium_voids(filled, void_mask, size_threshold=(10, 100))
+        medium_filled = np.sum(original_void_mask & ~void_mask) - small_filled
+        logger.debug(f"Tier 2 (medium): {medium_filled} voids filled")
 
-    # Tier 3: large voids
-    filled, void_mask = _fill_large_voids(filled, void_mask, size_threshold=100)
-    large_filled = np.sum(original_void_mask & ~void_mask) - small_filled - medium_filled
-    logger.debug(f"Tier 3 (large): {large_filled} voids filled")
+        # Tier 3: large voids
+        filled, void_mask = _fill_large_voids(filled, void_mask, size_threshold=100)
+        large_filled = np.sum(original_void_mask & ~void_mask) - small_filled - medium_filled
+        logger.debug(f"Tier 3 (large): {large_filled} voids filled")
+    else:
+        remaining = int(np.sum(void_mask))
+        logger.warning(
+            f"Large DEM ({elevation_array.size:,} px > {LARGE_DEM_PIXELS:,}): "
+            f"skipping griddata tiers — {remaining} remaining voids set to sea level (0 m)"
+        )
 
     # Fallback: any remaining NaNs
     nan_count = np.sum(np.isnan(filled))
