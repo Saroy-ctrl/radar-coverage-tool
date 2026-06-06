@@ -3,10 +3,8 @@
 Shadow geometry builder.
 
 Public functions:
-  extract_blocked_segments — run-length encode blocked range bins for one azimuth.
-
-Additional geometry builders (e.g. merged GeoJSON, shapely unions) will be added
-in future phases.
+  extract_blocked_segments   — run-length encode blocked range bins for one azimuth.
+  build_merged_shadow_geojson — convert shadow segments to merged GeoJSON with shapely unions.
 """
 
 import numpy as np
@@ -53,3 +51,71 @@ def extract_blocked_segments(visible_mask, ranges, az_deg):
         if outer_r > inner_r:
             result.append((float(az_deg), inner_r, outer_r))
     return result
+
+
+def _wedge_polygon(ant_lat, ant_lon, az_deg, inner_r, outer_r, half_az_deg):
+    """
+    Build a shapely Polygon for one (azimuth, inner_r, outer_r) shadow segment.
+    Uses 4 geodetic corners so adjacent azimuths share edges and union cleanly.
+    """
+    from shapely.geometry import Polygon
+    left_az  = (az_deg - half_az_deg) % 360
+    right_az = (az_deg + half_az_deg) % 360
+
+    lon_il, lat_il, _ = GEOD.fwd(ant_lon, ant_lat, left_az,  inner_r)
+    lon_ir, lat_ir, _ = GEOD.fwd(ant_lon, ant_lat, right_az, inner_r)
+    lon_ol, lat_ol, _ = GEOD.fwd(ant_lon, ant_lat, left_az,  outer_r)
+    lon_or, lat_or, _ = GEOD.fwd(ant_lon, ant_lat, right_az, outer_r)
+
+    return Polygon([
+        (lon_il, lat_il),
+        (lon_ol, lat_ol),
+        (lon_or, lat_or),
+        (lon_ir, lat_ir),
+        (lon_il, lat_il),
+    ])
+
+
+def build_merged_shadow_geojson(ant_lat, ant_lon, shadow_segments, azimuth_step_deg):
+    """
+    Convert shadow segments to a GeoJSON FeatureCollection with smooth merged polygons.
+
+    Adjacent azimuth wedges covering the same terrain feature are united by
+    shapely.unary_union into organic blob shapes, matching Cambridge Pixel's
+    appearance.
+
+    Args:
+        ant_lat, ant_lon:    antenna WGS84 position
+        shadow_segments:     list of (az_deg, inner_r_m, outer_r_m)
+        azimuth_step_deg:    azimuth resolution used in the computation run
+
+    Returns:
+        dict: GeoJSON FeatureCollection (Polygon or MultiPolygon geometry)
+    """
+    from shapely.ops import unary_union
+    from shapely.geometry import mapping
+
+    if not shadow_segments:
+        return {"type": "FeatureCollection", "features": []}
+
+    half = azimuth_step_deg / 2.0
+    polys = [
+        _wedge_polygon(ant_lat, ant_lon, az, inner_r, outer_r, half)
+        for az, inner_r, outer_r in shadow_segments
+    ]
+    valid_polys = [p for p in polys if p.is_valid and not p.is_empty]
+    if not valid_polys:
+        return {"type": "FeatureCollection", "features": []}
+
+    merged = unary_union(valid_polys)
+    if merged.is_empty:
+        return {"type": "FeatureCollection", "features": []}
+
+    return {
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "geometry": mapping(merged),
+            "properties": {}
+        }]
+    }
