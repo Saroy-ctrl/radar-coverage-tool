@@ -222,12 +222,15 @@ class ComputationWorker(QThread):
 
                     # Visible where target angle >= cumulative horizon (skip bin 0 = antenna)
                     visible_mask = target_angles[1:] >= horizon_angles[1:]
-                    blocked_idx  = np.where(~visible_mask)[0]
+                    visible_idx  = np.where(visible_mask)[0]
 
-                    if len(blocked_idx) > 0:
-                        max_r = float(ranges[1:][blocked_idx[0]])
+                    # Use LAST visible bin as coverage range (outer boundary).
+                    # First-blocked gives the near-range mountain shadow (e.g. Teide
+                    # slope at 5 km), not the outer coverage limit (ocean at 79 km).
+                    if len(visible_idx) > 0:
+                        max_r = float(ranges[1:][visible_idx[-1]])
                     else:
-                        max_r = float(ranges[-1])
+                        max_r = float(ranges[1])   # nothing visible: one step
 
                     coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
 

@@ -82,8 +82,13 @@ class VisibilityEngine:
         # Obstruction angles: angle from antenna to terrain (before diffraction)
         obs_angles = np.arctan2(h_apparent - h_antenna_amsl_m, ranges)
 
-        # Apply diffraction guard
-        obs_angles_with_guard = obs_angles + self.diffraction_guard_rad
+        # Apply diffraction guard only to terrain above curvature-corrected sea level.
+        # Ocean / sub-horizon apparent terrain cannot produce knife-edge diffraction.
+        # Applying the guard uniformly to every bin (including ocean) creates a
+        # spurious +0.5° horizon that hard-caps 100 m AGL visibility at ~11.5 km
+        # regardless of antenna height: 100/R >= guard_rad => R <= 11,456 m.
+        guard = np.where(h_apparent > 0.0, self.diffraction_guard_rad, 0.0)
+        obs_angles_with_guard = obs_angles + guard
 
         # Cumulative max: horizon tracking
         horizon_angles = np.maximum.accumulate(obs_angles_with_guard)
