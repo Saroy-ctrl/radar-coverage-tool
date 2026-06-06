@@ -45,6 +45,9 @@ data/                     ← gitignored; SRTM tiles go here
 | Leaflet CDN blocked (`L is not defined`) | `QWebEngine` sandbox blocks remote URLs from `file://` pages | `LocalContentCanAccessRemoteUrls=True` in QWebEngineSettings |
 | Coverage polygons never rendered | Folium GeoJson JS fails silently in WebEngine | Replaced Folium entirely with `L.polygon()` hand-written HTML |
 | `polygon_area` crash | `pyproj.Geod` has no `polygon_area()` in pyproj 3.x | Status bar uses `geod.geometry_area_perimeter(shapely.Polygon)` |
+| 100 m AGL hard-capped at ~11.5 km | Guard `+0.5°` added to every bin including ocean; proof: `100/R ≥ guard_rad → R ≤ 11,456 m` | Apply guard only when `h_apparent > 0` (`visibility_engine.py`) |
+| Coverage polygon ends at near-range mountain shadow | Worker stored first-blocked bin (e.g. 5 km Teide slope) not the outer coverage boundary (79 km ocean) | Use last-visible bin: `ranges[1:][visible_idx[-1]]` (`main_window.py`) |
+| Shadow zones shown as thin lines | `L.polyline()` centerline per azimuth; barely visible, no fill | `L.polygon()` 4-corner wedge per azimuth, `fillColor:#8b0000`, `weight:0` (`map_view.py`) |
 
 ---
 
@@ -67,8 +70,10 @@ The worker runs in a `QThread`. High-level flow:
       ```python
       target_angles = np.arctan2(h_apparent + h_agl - antenna_amsl_m, ranges)
       visible_mask  = target_angles[1:] >= horizon_angles[1:]   # skip bin 0
-      blocked_idx   = np.where(~visible_mask)[0]
-      max_r = ranges[1:][blocked_idx[0]] if blocked_idx.size else ranges[-1]
+      visible_idx   = np.where(visible_mask)[0]
+      # LAST visible bin = outer coverage boundary (not first-blocked, which
+      # gives the near-range mountain shadow rather than the far ocean limit)
+      max_r = ranges[1:][visible_idx[-1]] if visible_idx.size else ranges[1]
       coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
       ```
 5. Emit `coverage_computed`, `polar_data_ready`, `shadow_data_ready`, `computation_timed`
@@ -138,7 +143,10 @@ R_total = R_horizon(h_radar) + R_horizon(h_target)
 ### Obstruction Angle + Horizon Tracking (core algorithm)
 ```
 obs_angle[i] = atan2(h_apparent[i] - h_antenna_AMSL, range[i])
-obs_angle[i] += diffraction_guard_rad    # default 0.5° per BEL paper
+# Guard only on terrain above curvature-corrected sea level (h_apparent > 0).
+# Applying it to ocean bins hard-caps 100 m AGL at 100/guard_rad = 11.5 km.
+if h_apparent[i] > 0:
+    obs_angle[i] += diffraction_guard_rad    # default 0.5° per BEL paper
 horizon[i]   = max(horizon[i-1], obs_angle[i])   # cumulative max
 ```
 Point visible if `target_angle[i] >= horizon[i]`.
@@ -192,8 +200,10 @@ If void% > 20%: warn user. Any NaN reaching the computation loop = fatal bug.
 - Map: `LocalContentCanAccessRemoteUrls=True` in `QWebEngineSettings`.
 - Map: hand-write Leaflet HTML with `L.polygon()` — do NOT use Folium GeoJson layer.
 - Map shadow layer: rendered **before** coverage polygons in HTML so coverage paints over it.
-- Shadow wedges: `color:'#8b0000'`, `fillOpacity:0.55`, `weight:0` — lowest height band only.
-- `_build_shadow_features()`: skip azimuth if `inner_r >= max_range_m` (no shadow needed).
+- Shadow wedges: `L.polygon()` 4-corner wedge per blocked azimuth, `color:'#8b0000'`, `fillOpacity` from slider (default 0.55), `weight:0` — lowest height band only.
+- Shadow wedge corners: `[az−half, inner_r]`, `[az−half, max_range]`, `[az+half, max_range]`, `[az+half, inner_r]` where `half = azimuth_step_deg / 2`.
+- `_build_shadow_features()`: skip azimuth if `inner_r >= max_range_m` (no shadow needed). Min inner_r = 200 m to avoid degenerate point.
+- Shadow opacity slider default: 55% (matches Cambridge Pixel appearance out of the box).
 - `GEOD.fwd(lons, lats, azimuths, ranges)` — lons first, then lats (pyproj convention).
 - `ComputationRequest.azimuth_step_deg` / `range_step_m` — always read from request; NEVER hardcode in worker.
 - Area in status bar: `geod.geometry_area_perimeter(shapely.Polygon)` — NOT `polygon_area()`.
