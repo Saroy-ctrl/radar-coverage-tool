@@ -123,18 +123,20 @@ def _fill_medium_voids(elevation_array, void_mask, size_threshold=(10, 100)):
     filled = elevation_array.copy()
     remaining_mask = void_mask.copy()
 
-    # Get coordinates of valid pixels for interpolation
-    yy, xx = np.mgrid[0:elevation_array.shape[0], 0:elevation_array.shape[1]]
-    valid_mask = ~void_mask
-    valid_points = np.column_stack((yy[valid_mask], xx[valid_mask]))
-    valid_values = elevation_array[valid_mask]
+    # Get coordinates of valid pixels for interpolation.
+    # Use np.where instead of np.mgrid to avoid allocating two full-DEM arrays
+    # (np.mgrid on a 14400×18000 mosaic would require ~3.86 GiB).
+    valid_rows, valid_cols = np.where(~void_mask)
+    valid_points = np.column_stack((valid_rows, valid_cols))
+    valid_values = elevation_array[~void_mask]
 
     for void_id in range(1, num_features + 1):
         void_pixels = labeled == void_id
         void_size = np.sum(void_pixels)
 
         if size_threshold[0] <= void_size < size_threshold[1]:
-            void_coords = np.column_stack((yy[void_pixels], xx[void_pixels]))
+            void_rows, void_cols = np.where(void_pixels)
+            void_coords = np.column_stack((void_rows, void_cols))
             filled_values = griddata(
                 valid_points, valid_values, void_coords,
                 method='linear', fill_value=np.nan
@@ -167,17 +169,17 @@ def _fill_large_voids(elevation_array, void_mask, size_threshold=100):
     filled = elevation_array.copy()
     remaining_mask = void_mask.copy()
 
-    yy, xx = np.mgrid[0:elevation_array.shape[0], 0:elevation_array.shape[1]]
-    valid_mask = ~void_mask
-    valid_points = np.column_stack((yy[valid_mask], xx[valid_mask]))
-    valid_values = elevation_array[valid_mask]
+    valid_rows, valid_cols = np.where(~void_mask)
+    valid_points = np.column_stack((valid_rows, valid_cols))
+    valid_values = elevation_array[~void_mask]
 
     for void_id in range(1, num_features + 1):
         void_pixels = labeled == void_id
         void_size = np.sum(void_pixels)
 
         if void_size >= size_threshold:
-            void_coords = np.column_stack((yy[void_pixels], xx[void_pixels]))
+            void_rows, void_cols = np.where(void_pixels)
+            void_coords = np.column_stack((void_rows, void_cols))
             filled_values = griddata(
                 valid_points, valid_values, void_coords,
                 method='nearest', fill_value=np.nan
