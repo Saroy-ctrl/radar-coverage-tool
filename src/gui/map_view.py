@@ -170,12 +170,12 @@ class MapView(QWidget):
         max_range_m: float,
     ) -> list:
         """
-        Build shadow centerline features for terrain-blocked azimuths.
+        Build shadow wedge polygon features for terrain-blocked azimuths.
 
-        Returns one 2-point dict per blocked azimuth: the line from the
-        coverage boundary to max_range along the azimuth centre.
-        Azimuths where inner_r >= 0.85 * max_range_m are skipped
-        (barely-blocked directions add visual noise without insight).
+        Returns one 4-corner filled wedge polygon per blocked azimuth spanning
+        from the coverage boundary out to max_range_m, with angular width
+        equal to azimuth_step_deg. Azimuths where inner_r >= max_range_m are
+        skipped (no shadow needed — coverage reaches the instrumented limit).
 
         Args:
             ant_lat, ant_lon: antenna WGS84 position
@@ -184,26 +184,35 @@ class MapView(QWidget):
             max_range_m:      instrumented range limit
 
         Returns:
-            list of {"latlngs": [[lat_inner, lon_inner], [lat_outer, lon_outer]]} dicts
+            list of {"latlngs": [[lat, lon], ...]} dicts (4-corner wedge polygon)
         """
         from pyproj import Geod
         GEOD = Geod(ellps='WGS84')
-        significance_threshold = 0.85 * max_range_m
+        half = azimuth_step_deg / 2.0
+        # Minimum inner radius so the wedge doesn't degenerate to a point at the antenna
+        min_inner_r = 200.0
         features = []
 
         for i, inner_r in enumerate(ranges_m):
-            if inner_r >= significance_threshold:
+            if inner_r >= max_range_m:
                 continue
 
             az = i * azimuth_step_deg
+            az_l = az - half
+            az_r = az + half
+            r_in = max(float(inner_r), min_inner_r)
 
-            lon_inner, lat_inner, _ = GEOD.fwd(ant_lon, ant_lat, az, float(inner_r))
-            lon_outer, lat_outer, _ = GEOD.fwd(ant_lon, ant_lat, az, max_range_m)
+            lon_il, lat_il, _ = GEOD.fwd(ant_lon, ant_lat, az_l, r_in)
+            lon_ir, lat_ir, _ = GEOD.fwd(ant_lon, ant_lat, az_r, r_in)
+            lon_ol, lat_ol, _ = GEOD.fwd(ant_lon, ant_lat, az_l, max_range_m)
+            lon_or, lat_or, _ = GEOD.fwd(ant_lon, ant_lat, az_r, max_range_m)
 
             features.append({
                 "latlngs": [
-                    [float(lat_inner), float(lon_inner)],
-                    [float(lat_outer), float(lon_outer)],
+                    [float(lat_il), float(lon_il)],
+                    [float(lat_ol), float(lon_ol)],
+                    [float(lat_or), float(lon_or)],
+                    [float(lat_ir), float(lon_ir)],
                 ]
             })
 
@@ -275,15 +284,16 @@ L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
             coverage_features: list of feature dicts from _build_coverage_features()
             shadow_features: list of {"latlngs": [[lat, lon], ...]} dicts
         """
-        # Shadow polylines (rendered first — underneath coverage)
+        # Shadow wedge polygons (rendered first — underneath coverage)
         shadow_blocks = []
         for sfeat in (shadow_features or []):
             slatlngs_json = json.dumps(sfeat["latlngs"], separators=(',', ':'))
             shadow_blocks.append(f"""\
-L.polyline({slatlngs_json}, {{
-    color: '#ff2200',
-    weight: 1,
-    opacity: {self._shadow_opacity},
+L.polygon({slatlngs_json}, {{
+    color: '#8b0000',
+    fillColor: '#8b0000',
+    weight: 0,
+    fillOpacity: {round(self._shadow_opacity * 0.55, 4)},
     interactive: false
 }}).addTo(map);""")
 
