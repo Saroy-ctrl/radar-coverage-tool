@@ -24,6 +24,7 @@ from PyQt6.QtGui import QAction
 from src.gui.control_panel import ControlPanel, ComputationRequest
 from src.gui.map_view import MapView
 from src.gui.polar_view import PolarView
+from src.shadow_builder import extract_blocked_segments
 
 
 # Dark theme colors
@@ -156,7 +157,6 @@ class ComputationWorker(QThread):
             heights_agl = req.height_bands_m
             coverage_ranges_m = {h: np.zeros(n_az, dtype=np.float64) for h in heights_agl}
 
-            from src.shadow_builder import extract_blocked_segments
             _min_h_agl = min(heights_agl) if heights_agl else None
             all_shadow_segments = []   # list of (az_deg, inner_r_m, outer_r_m)
 
