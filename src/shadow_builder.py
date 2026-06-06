@@ -9,6 +9,8 @@ Public functions:
 
 import numpy as np
 from pyproj import Geod
+from shapely.geometry import Polygon, mapping
+from shapely.ops import unary_union
 
 GEOD = Geod(ellps='WGS84')
 MIN_INNER_R_M = 200.0   # prevent degenerate point polygon at antenna
@@ -58,7 +60,6 @@ def _wedge_polygon(ant_lat, ant_lon, az_deg, inner_r, outer_r, half_az_deg):
     Build a shapely Polygon for one (azimuth, inner_r, outer_r) shadow segment.
     Uses 4 geodetic corners so adjacent azimuths share edges and union cleanly.
     """
-    from shapely.geometry import Polygon
     left_az  = (az_deg - half_az_deg) % 360
     right_az = (az_deg + half_az_deg) % 360
 
@@ -92,8 +93,6 @@ def build_merged_shadow_geojson(ant_lat, ant_lon, shadow_segments, azimuth_step_
     Returns:
         dict: GeoJSON FeatureCollection (Polygon or MultiPolygon geometry)
     """
-    from shapely.ops import unary_union
-    from shapely.geometry import mapping
 
     if not shadow_segments:
         return {"type": "FeatureCollection", "features": []}
