@@ -49,6 +49,10 @@ class MapView(QWidget):
         self._coverage_opacity_factor = 1.0   # multiplier for all band opacities (0.0–1.0)
         self._shadow_opacity = 0.5            # absolute opacity for shadow polylines (0.0–1.0)
         self._max_range_m = 0.0               # set from shadow payload; drives range rings
+        self._shadow_mode = "Wedge"           # "Wedge" | "Polygon"
+        self._shadow_geojson = None           # stored GeoJSON dict for polygon mode
+        self._shadow_segments_cache = []      # stored segments for polygon mode
+        self._shadow_az_step_cache = 2.0
 
         # Fixed temp file path — overwritten cleanly each render
         self._tmp_path = Path(tempfile.gettempdir()) / "radar_map_view.html"
@@ -286,9 +290,25 @@ L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
         """
         # Shadow wedge polygons (rendered first — underneath coverage)
         shadow_blocks = []
-        for sfeat in (shadow_features or []):
-            slatlngs_json = json.dumps(sfeat["latlngs"], separators=(',', ':'))
+
+        if self._shadow_mode == "Polygon" and self._shadow_geojson:
+            # Inject pre-built merged GeoJSON as L.geoJSON() layer
+            geojson_str = json.dumps(self._shadow_geojson, separators=(',', ':'))
             shadow_blocks.append(f"""\
+L.geoJSON({geojson_str}, {{
+    style: {{
+        color: '#8b0000',
+        fillColor: '#8b0000',
+        weight: 0,
+        fillOpacity: {round(self._shadow_opacity, 4)}
+    }},
+    interactive: false
+}}).addTo(map);""")
+        else:
+            # Wedge mode: individual 4-corner polygon per blocked azimuth
+            for sfeat in (shadow_features or []):
+                slatlngs_json = json.dumps(sfeat["latlngs"], separators=(',', ':'))
+                shadow_blocks.append(f"""\
 L.polygon({slatlngs_json}, {{
     color: '#8b0000',
     fillColor: '#8b0000',
@@ -440,12 +460,19 @@ L.polygon({latlngs_json}, {{
 
     def set_shadow_data(self, ant_lat: float, ant_lon: float, payload: dict):
         """
-        Rebuild and store shadow wedge features, then re-render the map.
+        Rebuild shadow geometry from computation payload and re-render.
 
-        Args:
-            ant_lat, ant_lon: antenna WGS84 position
-            payload: {"ranges_m": list, "azimuth_step_deg": float, "max_range_m": float}
+        payload keys:
+            "ranges_m"        — per-azimuth last-visible range (wedge mode)
+            "shadow_segments" — list of (az_deg, inner_r, outer_r) tuples (polygon mode)
+            "azimuth_step_deg"
+            "max_range_m"
         """
+        self._max_range_m = payload["max_range_m"]
+        self._shadow_az_step_cache = payload["azimuth_step_deg"]
+        self._shadow_segments_cache = payload.get("shadow_segments", [])
+
+        # Always build the wedge features (used in Wedge mode and as fallback)
         self._shadow_features = self._build_shadow_features(
             ant_lat=ant_lat,
             ant_lon=ant_lon,
@@ -453,10 +480,20 @@ L.polygon({latlngs_json}, {{
             azimuth_step_deg=payload["azimuth_step_deg"],
             max_range_m=payload["max_range_m"],
         )
-        self._max_range_m = payload["max_range_m"]
-        # Re-render map with current coverage + new shadow
+
+        # Build merged polygon GeoJSON if in Polygon mode
+        if self._shadow_mode == "Polygon":
+            from src.shadow_builder import build_merged_shadow_geojson
+            self._shadow_geojson = build_merged_shadow_geojson(
+                ant_lat, ant_lon,
+                self._shadow_segments_cache,
+                payload["azimuth_step_deg"],
+            )
+        else:
+            self._shadow_geojson = None
+
         features = self._build_coverage_features(self.coverage_data)
-        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
+        self._render_map(ant_lat, ant_lon, features, self._shadow_features)
 
     def set_dem_bounds(self, bounds: dict):
         """
@@ -476,6 +513,22 @@ L.polygon({latlngs_json}, {{
     def set_shadow_opacity(self, opacity: float):
         """Update shadow line opacity and re-render. opacity in [0.0, 1.0]."""
         self._shadow_opacity = max(0.0, min(1.0, opacity))
+        features = self._build_coverage_features(self.coverage_data)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
+
+    def set_shadow_mode(self, mode: str):
+        """
+        Switch shadow rendering mode. Triggers a re-render with current data.
+        mode: "Wedge" (per-azimuth wedge polygons) or "Polygon" (shapely-merged blobs)
+        """
+        self._shadow_mode = mode
+        if mode == "Polygon" and self._shadow_segments_cache:
+            from src.shadow_builder import build_merged_shadow_geojson
+            self._shadow_geojson = build_merged_shadow_geojson(
+                self.radar_lat, self.radar_lon,
+                self._shadow_segments_cache,
+                self._shadow_az_step_cache,
+            )
         features = self._build_coverage_features(self.coverage_data)
         self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
 
