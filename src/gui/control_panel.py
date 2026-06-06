@@ -76,6 +76,7 @@ class ControlPanel(QWidget):
     export_geojson_requested = pyqtSignal()
     coverage_opacity_changed = pyqtSignal(float)
     shadow_opacity_changed = pyqtSignal(float)
+    shadow_mode_changed = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -220,6 +221,15 @@ class ControlPanel(QWidget):
         self.label_shadow_opacity_val = QLabel("55%")
         self.label_shadow_opacity_val.setMinimumWidth(38)
 
+        # === Shadow mode combo ===
+        self.combo_shadow_mode = QComboBox()
+        self.combo_shadow_mode.addItem("Wedge",    userData="Wedge")
+        self.combo_shadow_mode.addItem("Polygon (Smooth)", userData="Polygon")
+        self.combo_shadow_mode.setToolTip(
+            "Wedge: fast per-azimuth render.\n"
+            "Polygon: shapely-merged smooth blobs (slower, better quality)."
+        )
+
     def _populate_height_bands_table(self):
         """Populate height bands table with default heights."""
         self.table_heights.setRowCount(len(HEIGHT_BANDS))
@@ -326,6 +336,13 @@ class ControlPanel(QWidget):
         shd_row.addWidget(self.label_shadow_opacity_val)
         gdisp_layout.addLayout(shd_row)
 
+        # Shadow style toggle
+        shadow_mode_row = QHBoxLayout()
+        shadow_mode_row.addWidget(QLabel("Shadow style:"))
+        self.combo_shadow_mode.currentIndexChanged.connect(self._on_shadow_mode_changed)
+        shadow_mode_row.addWidget(self.combo_shadow_mode)
+        gdisp_layout.addLayout(shadow_mode_row)
+
         group_display.setLayout(gdisp_layout)
         layout.addWidget(group_display)
 
@@ -407,6 +424,10 @@ class ControlPanel(QWidget):
         """Emit shadow opacity as 0.0–1.0 fraction."""
         self.label_shadow_opacity_val.setText(f"{value}%")
         self.shadow_opacity_changed.emit(value / 100.0)
+
+    def _on_shadow_mode_changed(self, _index: int):
+        mode = self.combo_shadow_mode.currentData()
+        self.shadow_mode_changed.emit(mode)
 
     def recalibrate_estimate(self, elapsed_seconds: float):
         """Store measured elapsed time for the preset just used."""
