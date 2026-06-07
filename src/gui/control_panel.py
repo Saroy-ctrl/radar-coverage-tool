@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QDoubleSpinBox,
     QSlider, QPushButton, QCheckBox, QFileDialog,
-    QProgressBar, QComboBox, QLineEdit
+    QProgressBar, QComboBox, QLineEdit, QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
@@ -270,8 +270,21 @@ class ControlPanel(QWidget):
 
 
     def _create_layout(self):
-        """Create main layout."""
-        layout = QVBoxLayout(self)
+        """Wrap all inputs in a QScrollArea so the panel is usable on short screens."""
+        # Outer layout for this widget: just holds the scroll area
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+
+        # Inner widget that holds all the actual content
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
 
@@ -301,14 +314,12 @@ class ControlPanel(QWidget):
         gr_layout.addWidget(self.label_max_range)
         gr_layout.addWidget(self.spin_max_range)
 
-        # K-factor layout
         k_layout = QHBoxLayout()
         k_layout.addWidget(self.label_k_factor)
         k_layout.addWidget(self.slider_k_factor)
         k_layout.addWidget(self.label_k_value)
         gr_layout.addLayout(k_layout)
 
-        # Diffraction guard layout
         diff_layout = QHBoxLayout()
         diff_layout.addWidget(self.label_diffraction)
         diff_layout.addWidget(self.slider_diffraction)
@@ -344,7 +355,6 @@ class ControlPanel(QWidget):
         shd_row.addWidget(self.label_shadow_opacity_val)
         gdisp_layout.addLayout(shd_row)
 
-        # Shadow style toggle
         shadow_mode_row = QHBoxLayout()
         shadow_mode_row.addWidget(QLabel("Shadow style:"))
         self.combo_shadow_mode.currentIndexChanged.connect(self._on_shadow_mode_changed)
@@ -405,6 +415,9 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_export_png)
 
         layout.addStretch()
+
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
 
     def _connect_signals(self):
         """Connect internal signals (K-factor and diffraction sliders)."""
