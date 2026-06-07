@@ -17,7 +17,7 @@ Responsibilities:
 from dataclasses import dataclass
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QDoubleSpinBox,
-    QSlider, QPushButton, QCheckBox, QTableWidget, QTableWidgetItem, QFileDialog,
+    QSlider, QPushButton, QCheckBox, QFileDialog,
     QProgressBar, QComboBox, QLineEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -165,13 +165,29 @@ class ControlPanel(QWidget):
         # Per-preset measured elapsed time (recalibrated after each run)
         self._measured_elapsed = {}
 
-        # === Height Bands Table ===
-        self.label_heights = QLabel("Target Flight Heights:")
-        self.table_heights = QTableWidget()
-        self.table_heights.setColumnCount(3)
-        self.table_heights.setHorizontalHeaderLabels(["Enable", "Height (m)", "Color"])
-        self.table_heights.setMaximumHeight(150)
-        self._populate_height_bands_table()
+        # === Height Bands (inline rows, no table) ===
+        self._band_checkboxes: dict[int, QCheckBox] = {}
+        self._height_bands_layout = QVBoxLayout()
+        self._height_bands_layout.setSpacing(4)
+        for height, info in HEIGHT_BANDS.items():
+            row = QHBoxLayout()
+            row.setSpacing(8)
+
+            cb = QCheckBox(info["name"])
+            cb.setChecked(True)
+            self._band_checkboxes[height] = cb
+
+            swatch = QLabel()
+            swatch.setFixedSize(18, 18)
+            swatch.setStyleSheet(
+                f"background-color: {info['color']}; "
+                f"border: 1px solid #555; border-radius: 2px;"
+            )
+
+            row.addWidget(cb)
+            row.addWidget(swatch)
+            row.addStretch()
+            self._height_bands_layout.addLayout(row)
 
         # === DEM Source Group ===
         self.label_dem = QLabel("DEM File:")
@@ -252,36 +268,6 @@ class ControlPanel(QWidget):
         self.label_beam_error = QLabel("")
         self.label_beam_error.setStyleSheet("color: #ff4444; font-size: 11px;")
 
-    def _populate_height_bands_table(self):
-        """Populate height bands table with default heights."""
-        self.table_heights.setRowCount(len(HEIGHT_BANDS))
-
-        for row, (height, info) in enumerate(HEIGHT_BANDS.items()):
-            # Checkbox (enable)
-            checkbox = QCheckBox()
-            checkbox.setChecked(True)
-            self.table_heights.setCellWidget(row, 0, checkbox)
-
-            # Height value
-            label_height = QLabel(str(height))
-            self.table_heights.setItem(row, 1, QTableWidgetItem(label_height.text()))
-
-            # Color swatch
-            color_widget = QWidget()
-            color_layout = QHBoxLayout(color_widget)
-            color_widget.setLayout(color_layout)
-
-            color_box = QLabel()
-            color_box.setStyleSheet(f"background-color: {info['color']}; border: 1px solid #555;")
-            color_box.setMinimumSize(30, 20)
-            color_layout.addWidget(color_box)
-            color_layout.addStretch()
-            self.table_heights.setCellWidget(row, 2, color_widget)
-
-        # Adjust column widths
-        self.table_heights.setColumnWidth(0, 50)
-        self.table_heights.setColumnWidth(1, 80)
-        self.table_heights.setColumnWidth(2, 80)
 
     def _create_layout(self):
         """Create main layout."""
@@ -371,8 +357,7 @@ class ControlPanel(QWidget):
         # === Height Bands Group ===
         group_heights = QGroupBox("Target Flight Heights")
         gh_layout = QVBoxLayout()
-        gh_layout.addWidget(self.label_heights)
-        gh_layout.addWidget(self.table_heights)
+        gh_layout.addLayout(self._height_bands_layout)
         group_heights.setLayout(gh_layout)
         layout.addWidget(group_heights)
 
@@ -558,14 +543,8 @@ class ControlPanel(QWidget):
         self.line_obstructions.setText(path)
 
     def _get_selected_height_bands(self) -> list[float]:
-        """Get list of selected height bands from table."""
-        heights = []
-        for row in range(self.table_heights.rowCount()):
-            checkbox = self.table_heights.cellWidget(row, 0)
-            if checkbox.isChecked():
-                height_text = self.table_heights.item(row, 1).text()
-                heights.append(float(height_text))
-        return heights
+        """Return heights (m) whose checkbox is enabled."""
+        return [float(h) for h, cb in self._band_checkboxes.items() if cb.isChecked()]
 
     def set_computing_finished(self):
         """Called by main window when computation finishes."""
