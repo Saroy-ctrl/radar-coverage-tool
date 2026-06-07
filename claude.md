@@ -7,207 +7,187 @@
 
 ## PROJECT STATE (June 2026)
 
-**Status: Fully implemented and integrated.** All 6 backend engines are wired into the GUI. The app runs end-to-end: load a SRTM GeoTIFF → compute terrain-masked coverage → display coloured polygons on Leaflet map + polar OVD diagram.
+**Status: Fully implemented.** All 6 backend engines wired into GUI. End-to-end: load SRTM GeoTIFF → compute terrain-masked coverage → coloured polygons on Leaflet map + polar OVD diagram.
 
-**Phase A resolution upgrade complete (June 2026).** Resolution presets added; terrain-blocking shadow layer implemented on Leaflet map.
+**Completed features:** Resolution presets (Fast/Standard/High/Ultra), shadow layer (Wedge + Polygon modes), beam elevation angle controls (min/max beam, donut polygon rendering).
 
-### What exists at the root
+### File map
 
 ```
 src/
-  earth_model.py          ← K-factor, R_eff, curvature, horizon (EarthModel class)
-  dem_preprocessor.py     ← SRTM void detection + tiered fill (fill_voids function)
-  terrain_engine.py       ← DEM load, void preprocess, radial extract (TerrainEngine)
-  obstruction_engine.py   ← CSV obstacle load + inject (ObstructionEngine)
-  visibility_engine.py    ← horizon tracking, AGL multi-height (VisibilityEngine)
-  coverage_engine.py      ← polar→GeoJSON, area, export (CoverageEngine)
+  earth_model.py       ← K-factor, R_eff, curvature, horizon
+  dem_preprocessor.py  ← SRTM void detection + tiered fill
+  dem_manager.py       ← SRTM tile discovery + mosaic (NOT wired in worker — see Known Gaps)
+  terrain_engine.py    ← DEM load, void preprocess, radial extract
+  obstruction_engine.py← CSV obstacle load + inject
+  visibility_engine.py ← horizon tracking, AGL multi-height
+  coverage_engine.py   ← polar→GeoJSON, area, export
+  shadow_builder.py    ← run-length blocked segment extraction + shapely polygon merging
   gui/
-    main_window.py        ← QMainWindow + ComputationWorker (real backend wired in)
-    control_panel.py      ← all input widgets + ComputationRequest dataclass
-    map_view.py           ← QWebEngineView + hand-written Leaflet 1.9.4 HTML
-    polar_view.py         ← Matplotlib embedded polar OVD diagram
+    main_window.py     ← QMainWindow + ComputationWorker
+    control_panel.py   ← all input widgets + ComputationRequest dataclass
+    map_view.py        ← QWebEngineView + hand-written Leaflet 1.9.4 HTML
+    polar_view.py      ← Matplotlib embedded polar OVD diagram
 tests/
-  test_tier1_validation.py      ← V1–V5 synthetic tests (no DEM needed)
-  test_resolution_and_shadow.py ← 8 tests for resolution presets + shadow wedge geometry
-  conftest.py                   ← PyQt6 headless stub for CI/test environments
-main.py                   ← entry point: python main.py
-requirements.txt
-data/                     ← gitignored; SRTM tiles go here
+  test_beam_angles.py          ← 7 tests for beam gate math + dict format (all pass)
+  test_tier1_validation.py     ← V1–V5 synthetic tests (pre-existing import issue)
+  test_resolution_and_shadow.py← 15 tests; 3 known failures (see Known Gaps)
+  test_shadow_builder.py       ← 8 tests (all pass)
+  test_dem_manager.py          ← 8 tests (all pass)
+  conftest.py                  ← PyQt6 headless stub for CI
+main.py                ← entry point: python main.py
 ```
 
-### Bugs fixed (critical — do not reintroduce)
+### Bugs fixed (do not reintroduce)
 
-| Bug | Root cause | Fix applied |
-|-----|-----------|-------------|
-| Coverage always same circle | `h_amsl = site_elev + h_agl` fixed → ignores terrain | Per-range AGL: `arctan2(h_apparent[j] + h_agl − antenna_amsl, range[j])` |
-| Profile range started at 200m | First non-zero bin gave spurious horizon → locked to circle | `ranges = np.arange(0.0, max_range + step, step)` — starts at 0 |
-| Out-of-DEM points used boundary pixel | `np.clip` silently returned edge elevation | `in_bounds` mask; out-of-DEM → `0.0` (sea level) |
-| Leaflet CDN blocked (`L is not defined`) | `QWebEngine` sandbox blocks remote URLs from `file://` pages | `LocalContentCanAccessRemoteUrls=True` in QWebEngineSettings |
-| Coverage polygons never rendered | Folium GeoJson JS fails silently in WebEngine | Replaced Folium entirely with `L.polygon()` hand-written HTML |
-| `polygon_area` crash | `pyproj.Geod` has no `polygon_area()` in pyproj 3.x | Status bar uses `geod.geometry_area_perimeter(shapely.Polygon)` |
-| 100 m AGL hard-capped at ~11.5 km | Guard `+0.5°` added to every bin including ocean; proof: `100/R ≥ guard_rad → R ≤ 11,456 m` | Apply guard only when `h_apparent > 0` (`visibility_engine.py`) |
-| Coverage polygon ends at near-range mountain shadow | Worker stored first-blocked bin (e.g. 5 km Teide slope) not the outer coverage boundary (79 km ocean) | Use last-visible bin: `ranges[1:][visible_idx[-1]]` (`main_window.py`) |
-| Shadow zones shown as thin lines | `L.polyline()` centerline per azimuth; barely visible, no fill | `L.polygon()` 4-corner wedge per azimuth, `fillColor:#8b0000`, `weight:0` (`map_view.py`) |
+| Bug | Fix |
+|-----|-----|
+| Coverage always same circle | Per-range AGL: `arctan2(h_apparent[j] + h_agl − antenna_amsl, range[j])` |
+| Profile range started at 200m | `ranges = np.arange(0.0, max_range + step, step)` — starts at 0 |
+| Out-of-DEM points used boundary pixel | `in_bounds` mask; out-of-DEM → `0.0` (sea level) |
+| Leaflet CDN blocked (`L is not defined`) | `LocalContentCanAccessRemoteUrls=True` in QWebEngineSettings |
+| Coverage polygons never rendered | Replaced Folium with hand-written `L.polygon()` HTML |
+| `polygon_area` crash (pyproj 3.x) | `geod.geometry_area_perimeter(shapely.Polygon)` |
+| 100 m AGL hard-capped at ~11.5 km | Apply diffraction guard only when `h_apparent > 0` |
+| Coverage ends at near-range shadow | Use last-visible bin: `ranges[1:][visible_idx[-1]]` |
+| Shadow zones shown as thin lines | `L.polygon()` 4-corner wedge, `fillColor:#8b0000`, `weight:0` |
 
 ---
 
-## HOW THE COMPUTATION WORKS (actual implementation)
+## HOW THE COMPUTATION WORKS
 
-### Entry point: `ComputationWorker.run()` in `src/gui/main_window.py`
+### `ComputationWorker.run()` — `src/gui/main_window.py`
 
-The worker runs in a `QThread`. High-level flow:
-
-1. Open DEM via rasterio → float64 array, nodata → 0, out-of-range → 0
-2. Build vectorised `sample_dem(lats, lons)` closure using the affine transform
+1. Open DEM via rasterio → float64, nodata→0, out-of-range→0
+2. Build vectorised `sample_dem(lats, lons)` closure from affine transform
 3. Create `EarthModel(k_factor)` and `VisibilityEngine(earth, diffraction_guard_rad)`
-4. For each azimuth in `np.arange(0, 360, AZIMUTH_STEP=2°)` (180 total):
-   a. `GEOD.fwd(ant_lon, ant_lat, az, ranges)` → `(lons_p, lats_p)` for all range bins
-   b. Fix bin 0 to exact antenna coords; set `elevations[0] = site_elev_m`
-   c. `sample_dem(lats_p, lons_p)` → elevation profile
-   d. Inject obstructions (if CSV loaded)
-   e. `vis.compute_horizon_angles(profile, antenna_amsl_m)` → `horizon_angles`, `h_apparent`
-   f. For each `h_agl` in `height_bands_m`:
-      ```python
-      target_angles = np.arctan2(h_apparent + h_agl - antenna_amsl_m, ranges)
-      visible_mask  = target_angles[1:] >= horizon_angles[1:]   # skip bin 0
-      visible_idx   = np.where(visible_mask)[0]
-      # LAST visible bin = outer coverage boundary (not first-blocked, which
-      # gives the near-range mountain shadow rather than the far ocean limit)
-      max_r = ranges[1:][visible_idx[-1]] if visible_idx.size else ranges[1]
-      coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
-      ```
-5. Emit `coverage_computed`, `polar_data_ready`, `shadow_data_ready`, `computation_timed`
+4. Precompute: `min_beam_rad`, `max_beam_rad` from request
+5. For each azimuth in `np.arange(0, 360, AZIMUTH_STEP)`:
+   - `GEOD.fwd(...)` → profile lats/lons; fix bin 0 to antenna; sample DEM; inject obstructions
+   - `vis.compute_horizon_angles(profile, antenna_amsl_m)` → `horizon_angles`, `h_apparent`
+   - For each `h_agl`:
+     ```python
+     target_angles   = np.arctan2(h_apparent + h_agl - antenna_amsl_m, ranges)
+     terrain_visible = target_angles[1:] >= horizon_angles[1:]          # Gate 1: terrain
+     beam_within     = (target_angles[1:] >= min_beam_rad) & \
+                       (target_angles[1:] <= max_beam_rad)               # Gate 2: beam window
+     combined_mask   = terrain_visible & beam_within
+     visible_idx     = np.where(combined_mask)[0]
+     max_r = ranges[1:][visible_idx[-1]] if visible_idx.size else ranges[1]  # outer boundary
+     min_r = ranges[1:][visible_idx[0]]  if visible_idx.size else ranges[1]  # inner boundary
+     coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
+     inner_ranges_m[h_agl][i]    = min_r
+     # Shadow uses terrain_visible ONLY — beam exclusion ≠ terrain blocking
+     if h_agl == _min_h_agl:
+         segs = extract_blocked_segments(terrain_visible, ranges, az)
+     ```
+6. Emit `coverage_computed`, `polar_data_ready`, `shadow_data_ready`, `computation_timed`
 
-**Key parameters (now user-controlled via resolution preset):**
-- `RANGE_STEP_M = req.range_step_m` (200m Fast → 50m Ultra)
-- `AZIMUTH_STEP = req.azimuth_step_deg` (2° Fast → 0.5° Ultra)
-- Height bands passed as AGL metres (not AMSL)
+**`coverage_data` format** (emitted via `coverage_computed` signal):
+```python
+{height_m: {"outer": [(lat, lon), ...], "inner": [(lat, lon), ...] or None}}
+# inner is None when min_beam_deg <= -89.9° (default ±90°) or inner radius degenerate
+```
 
-**New signals emitted after the azimuth loop:**
-- `shadow_data_ready(dict)` — `{"ranges_m": list, "azimuth_step_deg": float, "max_range_m": float}` using `min(height_bands_m)` (lowest band, most restrictive)
-- `computation_timed(float)` — wall-clock seconds; received by `ControlPanel.recalibrate_estimate()`
-
-### `ComputationRequest` dataclass (src/gui/control_panel.py)
+### `ComputationRequest` dataclass — `src/gui/control_panel.py`
 
 ```python
 @dataclass
 class ComputationRequest:
     radar_lat: float
     radar_lon: float
-    site_elevation_amsl_m: float   # DEM elevation at site (set manually in control panel)
-    antenna_amsl_m: float          # site_elev + mast + antenna height
+    site_elevation_amsl_m: float
+    antenna_amsl_m: float
     k_factor: float
     max_range_km: float
-    height_bands_m: list[float]    # AGL target heights
+    height_bands_m: list[float]
     diffraction_guard_deg: float
     dem_path: str = None
     obstructions_path: str = None
-    azimuth_step_deg: float = 2.0  # from resolution preset — DO NOT hardcode in worker
-    range_step_m: float = 200.0    # from resolution preset — DO NOT hardcode in worker
+    azimuth_step_deg: float = 2.0    # from resolution preset — NEVER hardcode in worker
+    range_step_m: float = 200.0      # from resolution preset — NEVER hardcode in worker
+    min_beam_deg: float = -90.0      # beam elevation window — ±90° = no constraint
+    max_beam_deg: float = 90.0
 ```
 
-### Resolution presets (src/gui/control_panel.py)
+### Resolution presets
 
 ```python
 RESOLUTION_PRESETS = {
-    "Fast":     (2.0,  200.0),   # ~30s
-    "Standard": (1.0,  100.0),   # ~2 min
-    "High":     (0.5,  100.0),   # ~4 min
-    "Ultra":    (0.5,   50.0),   # ~8 min
+    "Fast":     (2.0, 200.0),   # ~30s
+    "Standard": (1.0, 100.0),   # ~2 min
+    "High":     (0.5, 100.0),   # ~4 min
+    "Ultra":    (0.5,  50.0),   # ~8 min
 }
 ```
-Selected via `QComboBox` in "Computation Resolution" group. Estimate label recalibrates after each run using `recalibrate_estimate(elapsed_seconds)`. Preset name stored as `userData` on each combo item — retrieved via `currentData()`, not index arithmetic.
+Preset name stored as `userData` on combo items — retrieved via `currentData()`, not index arithmetic.
 
 ---
 
 ## CORE PHYSICS
 
-### Effective Earth Radius (K-factor — NEVER hardcode)
-```
-R_eff = K * 6_371_000    # K=4/3 standard, K=1.0 optical, K=user-defined
-```
+**Effective Earth Radius:** `R_eff = K * 6_371_000` — K=4/3 standard. NEVER hardcode.
 
-### Curvature Correction (apply to TERRAIN, not target)
-```
-delta_h = d² / (2 * R_eff)
-h_apparent = h_terrain_AMSL - delta_h
-```
-At 50 km, K=4/3: correction ≈ 94 m. Never skip.
+**Curvature correction** (apply to terrain, not target):
+`delta_h = d² / (2 * R_eff)` → `h_apparent = h_terrain_AMSL - delta_h`
+At 50 km, K=4/3: ≈94 m. Never skip.
 
-### Radar Horizon + Total Range (BEL paper Eq. 2–3)
-```
-R_horizon(h) = sqrt(2 * R_eff * h)
-R_total = R_horizon(h_radar) + R_horizon(h_target)
-```
+**Radar horizon:** `R_horizon(h) = sqrt(2 * R_eff * h)` → `R_total = R_horizon(h_radar) + R_horizon(h_target)`
 
-### Obstruction Angle + Horizon Tracking (core algorithm)
+**Horizon tracking:**
 ```
 obs_angle[i] = atan2(h_apparent[i] - h_antenna_AMSL, range[i])
-# Guard only on terrain above curvature-corrected sea level (h_apparent > 0).
-# Applying it to ocean bins hard-caps 100 m AGL at 100/guard_rad = 11.5 km.
-if h_apparent[i] > 0:
-    obs_angle[i] += diffraction_guard_rad    # default 0.5° per BEL paper
-horizon[i]   = max(horizon[i-1], obs_angle[i])   # cumulative max
+if h_apparent[i] > 0: obs_angle[i] += diffraction_guard_rad   # guard on terrain only
+horizon[i] = max(horizon[i-1], obs_angle[i])
 ```
 Point visible if `target_angle[i] >= horizon[i]`.
 
-### Multi-Height AGL (CORRECT — critical, previously broken)
-```python
-# h_agl = target height above LOCAL terrain at each range bin
-# h_apparent[j] = terrain_elevation[j] - curvature_correction(range[j])
-target_angle[j] = arctan2(h_apparent[j] + h_agl - antenna_amsl, ranges[j])
-```
-**NEVER** use `h_amsl = site_elev + h_agl` as a fixed constant. That eliminates terrain blocking entirely.
+**Multi-height AGL (critical — previously broken):**
+`target_angle[j] = arctan2(h_apparent[j] + h_agl - antenna_amsl, ranges[j])`
+**NEVER** use `h_amsl = site_elev + h_agl` as a fixed constant — eliminates terrain blocking.
 
-### Geodesy — NEVER flat Earth (>1% error beyond 10 km)
-`pyproj.Geod(ellps='WGS84')` for all distance/bearing. `GEOD.fwd()` for forward projection.
+**Geodesy:** `pyproj.Geod(ellps='WGS84')` everywhere. Never flat Earth (>1% error beyond 10 km).
 
 ---
 
-## SRTM VOID PREPROCESSING — MANDATORY
+## SRTM VOID PREPROCESSING
 
-SRTM NoData = -32768. If not filled: silent incorrect results (`h_apparent` → large negative).
+SRTM NoData = -32768. If unfilled: `h_apparent` → large negative → silent wrong results.
 
-**Pipeline (run once per tile, cache as `*_filled.tif`):**
-1. **Detect:** void if == nodata OR < -500 OR > 9000. Log void %.
-2. **Tier 1** small voids (<10 px): `scipy.ndimage.generic_filter(nanmean, size=7)`
-3. **Tier 2** medium (10–100 px): `scipy.interpolate.griddata(method='linear')`
-4. **Tier 3** large (>100 px): `scipy.interpolate.griddata(method='nearest')`
-5. **Fallback:** `np.nan_to_num(arr, nan=0.0)` + warning
-6. **Smooth boundaries:** `gaussian_filter(sigma=1)` blended at fill edges only
-7. **Verify:** assert remaining voids == 0, max fill deviation < 500 m
-8. **Cache:** save as float32 GeoTIFF (LZW compress, nodata=-9999)
+Pipeline (cache as `*_filled.tif`): detect voids → Tier 1 small (<10 px, `generic_filter`) → Tier 2 medium (10–100 px, `griddata linear`) → Tier 3 large (>100 px, `griddata nearest`) → `nan_to_num(0)` fallback → `gaussian_filter` boundary smoothing → verify 0 remaining voids → save float32 GeoTIFF.
 
-If void% > 20%: warn user. Any NaN reaching the computation loop = fatal bug.
-
-**Note:** The current `ComputationWorker.run()` does basic void masking inline (nodata→0, out-of-range→0) but does **not** call `DEMPreprocessor` with the full tiered pipeline. For production use on real SRTM tiles, wire `TerrainEngine.load_tile()` properly.
+**Note:** Worker currently does inline nodata→0 only. Wire `TerrainEngine.load_tile()` before running on data-rich tiles (Tibet, Crete).
 
 ---
 
 ## KEY IMPLEMENTATION RULES
 
-- **float64 everywhere** in computation. Never float32 for range/elevation.
-- **numpy vectorised** inside radial loop. No Python loops over range bins.
-- `np.arctan2(y, x)` always — never `arctan(y/x)`.
-- K-factor read from `earth_model.k` always — no literals.
-- GUI computation in `QThread` always — never block main thread.
-- Profile ranges **start at 0** (antenna bin); `elevations[0] = site_elev_m`.
-- Out-of-DEM points → `0.0` (sea level), NOT boundary pixel clipping.
-- AGL target angle: `arctan2(h_apparent + h_agl − antenna_amsl, range)` — per-range.
-- Visibility check skips bin 0: `target_angles[1:] >= horizon_angles[1:]`.
-- GeoJSON polygon: first coordinate == last coordinate (closed ring).
-- Polar diagram: `theta_zero='N'`, `theta_direction=-1` (compass convention).
-- Map: `LocalContentCanAccessRemoteUrls=True` in `QWebEngineSettings`.
-- Map: hand-write Leaflet HTML with `L.polygon()` — do NOT use Folium GeoJson layer.
-- Map shadow layer: rendered **before** coverage polygons in HTML so coverage paints over it.
-- Shadow wedges: `L.polygon()` 4-corner wedge per blocked azimuth, `color:'#8b0000'`, `fillOpacity` from slider (default 0.55), `weight:0` — lowest height band only.
-- Shadow wedge corners: `[az−half, inner_r]`, `[az−half, max_range]`, `[az+half, max_range]`, `[az+half, inner_r]` where `half = azimuth_step_deg / 2`.
-- `_build_shadow_features()`: skip azimuth if `inner_r >= max_range_m` (no shadow needed). Min inner_r = 200 m to avoid degenerate point.
-- Shadow opacity slider default: 55% (matches Cambridge Pixel appearance out of the box).
-- `GEOD.fwd(lons, lats, azimuths, ranges)` — lons first, then lats (pyproj convention).
-- `ComputationRequest.azimuth_step_deg` / `range_step_m` — always read from request; NEVER hardcode in worker.
-- Area in status bar: `geod.geometry_area_perimeter(shapely.Polygon)` — NOT `polygon_area()`.
-- `CoverageEngine.compute_polygon_area()` still uses `GEOD.polygon_area(lons, lats)` — verify this works on your pyproj version.
+**Computation:**
+- float64 everywhere; numpy-vectorised inside radial loop (no Python loops over bins)
+- `np.arctan2(y, x)` always; K-factor from `earth_model.k` always
+- Profile ranges start at 0; `elevations[0] = site_elev_m`
+- Out-of-DEM → `0.0` (sea level), NOT boundary pixel clipping
+- Visibility check skips bin 0: `target_angles[1:] >= horizon_angles[1:]`
+- `azimuth_step_deg` / `range_step_m` — always read from `ComputationRequest`; NEVER hardcode
+
+**Beam angles:**
+- Two-gate check: `combined_mask = terrain_visible & beam_within`
+- Shadow extraction uses `terrain_visible` ONLY — beam exclusion is not terrain blocking
+- Inner ring only emitted when `req.min_beam_deg > -89.9` AND `max(inner_r_arr) > RANGE_STEP_M`
+- `coverage_data[h]["outer"]` = outer boundary; `["inner"]` = donut hole or `None`
+
+**Map rendering:**
+- `LocalContentCanAccessRemoteUrls=True` in `QWebEngineSettings`
+- Hand-write Leaflet HTML with `L.polygon()` — do NOT use Folium GeoJson
+- Shadow layer rendered before coverage polygons (shadow underneath)
+- `_build_coverage_features` returns `latlngs` as list-of-rings: `[outer_ring]` or `[outer_ring, inner_ring]`
+- `L.polygon(latlngs)` natively renders donut when two rings supplied — no JS changes needed
+- Shadow wedge: 4-corner `L.polygon()`, `fillColor:'#8b0000'`, `weight:0`, lowest height band only
+- Shadow mode toggle: Wedge (per-azimuth `L.polygon`) vs Polygon (`L.geoJSON` with `unary_union`)
+- `GEOD.fwd(lons, lats, azimuths, ranges)` — lons first (pyproj convention)
+- Area in status bar: `geod.geometry_area_perimeter(shapely.Polygon)` — NOT `polygon_area()`
+- GeoJSON polygon: first coord == last coord (closed ring)
+- Polar diagram: `theta_zero='N'`, `theta_direction=-1`
 
 ---
 
@@ -216,104 +196,90 @@ If void% > 20%: warn user. Any NaN reaching the computation loop = fatal bug.
 ```bash
 conda install -c conda-forge rasterio gdal pyproj geopandas scipy numpy pandas shapely
 pip install PyQt6 PyQt6-WebEngine matplotlib
-# folium NOT required — replaced by hand-written Leaflet HTML
+# folium NOT required
 ```
 
-**GUI:** PyQt6 + Matplotlib (polar) + hand-written Leaflet 1.9.4 HTML via QWebEngineView. Dark theme `#1e1e2e`.
-**DEM:** SRTM3 GeoTIFF primary. DTED Level 1/2 same code path (rasterio handles both).
-**Leaflet CDN:** pinned to `https://unpkg.com/leaflet@1.9.4/dist/leaflet.{css,js}`. For true offline, download and embed locally.
-
----
+GUI: PyQt6 + Matplotlib (polar) + Leaflet 1.9.4 HTML via QWebEngineView. Dark theme `#1e1e2e`.
+DEM: SRTM3 GeoTIFF primary; DTED Level 1/2 same code path.
+Leaflet CDN: `https://unpkg.com/leaflet@1.9.4/dist/leaflet.{css,js}`.
 
 ## HEIGHT BAND COLOURS (Cambridge Pixel convention)
 
 ```python
 HEIGHT_BAND_COLORS = {
-    50:   {"color": "#00cc44", "opacity": 0.45},   # Green (lowest)
-    100:  {"color": "#aacc00", "opacity": 0.40},   # Yellow-green
-    500:  {"color": "#ff8800", "opacity": 0.40},   # Orange
-    1000: {"color": "#ff3300", "opacity": 0.35},   # Red
-    3000: {"color": "#cc00ff", "opacity": 0.30},   # Magenta (highest)
+    50:   {"color": "#00cc44", "opacity": 0.45},
+    100:  {"color": "#aacc00", "opacity": 0.38},
+    500:  {"color": "#ff8800", "opacity": 0.32},
+    1000: {"color": "#ff3300", "opacity": 0.22},
+    3000: {"color": "#cc00ff", "opacity": 0.15},
 }
 ```
-Draw highest height first (largest area), lowest last (painted on top, most restrictive visible).
+Draw highest height first, lowest last (lowest band painted on top).
 
 ---
 
-## VALIDATION CASES
+## VALIDATION
 
-### Tier 1 — No DEM needed (run on every change, `tests/test_tier1_validation.py`)
+### Tier 1 — No DEM (`tests/test_tier1_validation.py`)
 | ID | Test | Pass condition |
 |----|------|----------------|
-| V1 | Flat terrain, all zeros | Perfect circle ±1% of `R_total(h_antenna, H)` |
+| V1 | Flat terrain | Circle ±1% of `R_total(h_antenna, H)` |
 | V2 | K-factor ratio | `range(K=4/3) / range(K=1.0) = sqrt(4/3) ± 0.1%` |
-| V3 | Single obstacle at 10 km, az=90° | az=90° blocked <10 km; az=0°,180°,270° unaffected |
-| V4 | Diffraction guard 0° vs 0.5° | `range(0.5°) ≤ range(0°)` for blocked azimuth |
+| V3 | Single obstacle az=90° | az=90° blocked; az=0°,180°,270° unaffected |
+| V4 | Diffraction guard 0° vs 0.5° | `range(0.5°) ≤ range(0°)` |
 | V5 | Synthetic void fill | `fill_successful=True`, max deviation < 50 m |
 
-Run with: `python -m pytest tests/test_tier1_validation.py -v`
-
-### Tier 2 — Real DEM (tiles from srtm.csi.cgiar.org, place in `data/dem/`)
+### Tier 2 — Real DEM (tiles from srtm.csi.cgiar.org → `data/dem/`)
 | ID | Site | Tile | What it proves |
 |----|------|------|----------------|
-| V7 | Dover, England 51.13°N 1.32°E | N51E001 | East/West ratio >1.5 (cliff AMSL) |
-| V8 | Heraklion, Crete 35.33°N 25.13°E | N35E025 | North/South ratio >2.0 (island + mountain) |
-| V9 | Ben Nevis, UK 56.8°N −5.0°E | N56W006 | Irregular coverage (Highland terrain) |
-| V10 | Al Jouf, Saudi Arabia 29.78°N 40.10°E | N29E040 | K-factor ratio holds on real flat desert |
-| V11 | Canvey Island, UK 51.52°N 0.58°E | N51E000 | Obstruction injection masks Shard bearing |
+| V7 | Dover 51.13°N 1.32°E | N51E001 | East/West ratio >1.5 |
+| V8 | Heraklion 35.33°N 25.13°E | N35E025 | North/South ratio >2.0 |
+| V9 | Ben Nevis 56.8°N −5.0°E | N56W006 | Irregular Highland coverage |
+| V10 | Al Jouf 29.78°N 40.10°E | N29E040 | K-factor ratio on flat desert |
+| V11 | Canvey Island 51.52°N 0.58°E | N51E000 | Obstruction injection masks Shard |
 
 ---
 
-## KNOWN GAPS / NEXT STEPS
+## KNOWN GAPS
 
-### Phase B — UI feature parity with Cambridge Pixel (not yet started)
-- Start range / inner donut hole (ring-shaped coverage instead of filled disc)
-- Beam elevation angle controls (min/max elevation angle, not just AGL height bands)
-- Coverage transparency slider (per-band opacity control in real time)
+### Phase B — remaining Cambridge Pixel feature parity
+- Start range / inner donut hole via separate spinbox (beam angles give inner boundary; dedicated start-range control not yet built)
+- Per-band opacity control (real-time slider per height)
 - Map brightness/contrast sliders
-- DMS coordinate input (degrees/minutes/seconds)
-- Azimuth extent — compute partial sector (e.g. 90°–270° only)
+- DMS coordinate input
+- Azimuth extent (partial sector, e.g. 90°–270°)
 - Above Sea Level vs Ground toggle for target heights
-- True offline map (download Leaflet 1.9.4 + OSM tiles, embed locally)
+- True offline map (embed Leaflet + OSM tiles locally)
 
 ### Existing gaps
 
-1. **DEM preprocessing not fully wired in GUI.** `ComputationWorker.run()` does basic nodata→0 substitution inline instead of calling `DEMPreprocessor.fill_voids()`. Before running on data-rich tiles (Tibet, Crete), wire `terrain_engine.load_tile()` into the worker.
+1. **DEM preprocessing not wired.** Worker does inline nodata→0; `DEMPreprocessor.fill_voids()` not called. Wire `TerrainEngine.load_tile()` before Crete/Tibet runs.
 
-2. **GeoJSON export is placeholder.** `_on_export_geojson()` in `main_window.py` reconstructs GeoJSON from stored `coverage_data` dict using placeholder ranges — it does not call the full `CoverageEngine.polar_to_geojson()` pipeline properly. Rewrite to build GeoJSON directly from `coverage_ranges_m` during the computation.
+2. **GeoJSON export is placeholder.** `_on_export_geojson()` uses placeholder ranges instead of `CoverageEngine.polar_to_geojson()`. Rewrite to build from `coverage_ranges_m` during computation. Also: export iterates `band_data["outer"]` now (updated for new format).
 
-3. **True offline not yet achieved.** Map tiles and Leaflet library load from CDN. For full offline operation, download Leaflet 1.9.4 and OSM tiles and embed locally.
+3. **True offline not achieved.** Leaflet + map tiles load from CDN.
 
-4. ~~180 azimuths at 2° resolution~~ **RESOLVED.** Resolution preset selector added — Fast (2°/200m) through Ultra (0.5°/50m) selectable in the control panel.
+4. **3 stale tests in `test_resolution_and_shadow.py`** (known failures — do not revert code to fix):
+   - `test_shadow_rendered_as_polyline_not_polygon` — expects old `L.polyline` behaviour
+   - `test_build_shadow_features_fully_blocked_returns_features` — expects 2-point centerline, not 4-corner wedge
+   - `test_build_shadow_features_significance_filter` — expects 0.85× threshold not in current code
 
-5. **Tier 1 test suite uses different API than main_window.** Tests call `VisibilityEngine.compute_target_visibility(profile, h_antenna, h_target_amsl_m)` with absolute AMSL height. The worker uses the per-range AGL path directly. Both are correct but test the engine differently.
+5. **`dem_manager.py` not wired.** `DEMManager.open_mosaic()` reverted after multi-tile mosaics produced boxy wrong-shape coverage (nodata in mosaic treated as terrain void). Fix: fill voids per-tile before merging.
+
+6. **`test_tier1_validation.py` pre-existing import error.** `from visibility_engine import VisibilityEngine` fails due to relative import; unrelated to current work.
 
 ---
 
 ## WHAT NOT TO BUILD
-Radar equation/RCS, full ITU-R P.526 diffraction, propagation loss, multi-site comparison, DEM download, cloud/web, 3D, animation, UTM reprojection.
-
----
+Radar equation/RCS, ITU-R P.526 diffraction, propagation loss, multi-site comparison, DEM download, cloud/web, 3D, animation, UTM reprojection.
 
 ## SAMPLE DATA
 
-`data/obstructions/sample_obstructions.csv`:
-```
-lat,lon,height_amsl_m,type,description
-34.1600,77.5900,3350.0,tower,Sample Tower
-```
+`data/obstructions/sample_obstructions.csv`: `lat,lon,height_amsl_m,type,description` / `34.16,77.59,3350,tower,Sample Tower`
 
-`tests/data/london_obstructions.csv` (for V11):
-```
-lat,lon,height_amsl_m,type,description
-51.5045,-0.0196,310.0,skyscraper,The Shard
-51.5034,-0.0009,235.0,skyscraper,Canary Wharf
-```
-
----
+`tests/data/london_obstructions.csv`: Shard (310 m, 51.5045°N 0.0196°W) + Canary Wharf (235 m)
 
 ## CODE STYLE
-- Docstrings: physical meaning + units + formula source (e.g. `# BEL paper Eq. 3`)
+- Docstrings: physical meaning + units + formula source (`# BEL paper Eq. 3`)
 - Parameter names include units: `range_m`, `height_amsl_m`, `angle_rad`
 - No magic numbers — named constants at module level
-- Log void fill stats and DEM bounds on every DEM load
