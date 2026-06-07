@@ -5,25 +5,33 @@ Tests for radar beam elevation angle feature.
 Covers:
   - ComputationRequest default values (±90° = no constraint)
   - Beam gate numpy logic (pure math, no DEM needed)
-  - MapView._build_coverage_features reading a new dict format
+  - MapView._build_coverage_features reading new dict format
+
+Imports use importlib.util to load individual modules directly,
+bypassing src/gui/__init__.py (which triggers polar_view → matplotlib
+→ Qt version check that breaks headless test environments).
 """
 
-import numpy as np
-import pytest
+import importlib.util
+import pathlib
 import sys
-from pathlib import Path
+import numpy as np
 
-# Add src/ to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+_ROOT = pathlib.Path(__file__).parent.parent
 
-# Import ComputationRequest directly from control_panel module to avoid
-# triggering matplotlib imports through gui/__init__.py chain.
-# This allows the test to run in headless environments where Qt may be mocked.
-try:
-    from gui.control_panel import ComputationRequest
-except ImportError:
-    # If matplotlib refuses to load, skip ComputationRequest tests gracefully
-    ComputationRequest = None
+
+def _load(rel_path: str, name: str):
+    """Load a single source file as a module, bypassing package __init__.py."""
+    spec = importlib.util.spec_from_file_location(name, _ROOT / rel_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Load control_panel directly (avoids gui/__init__ → main_window → polar_view → matplotlib)
+_cp = _load("src/gui/control_panel.py", "control_panel")
+ComputationRequest = _cp.ComputationRequest
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +40,6 @@ except ImportError:
 
 def test_computation_request_has_beam_angle_defaults():
     """ComputationRequest defaults to ±90° beam angles (no constraint)."""
-    if ComputationRequest is None:
-        pytest.skip("ComputationRequest not importable due to matplotlib/Qt issues")
-
     req = ComputationRequest(
         radar_lat=51.5,
         radar_lon=0.0,
@@ -70,7 +75,7 @@ def test_beam_gate_default_is_transparent():
 def test_beam_gate_max_angle_excludes_steep_near_range():
     """max_beam=2° excludes bins whose elevation angle exceeds 2°."""
     target_angles = np.radians(np.array([10.0, 5.0, 2.0, 1.0, 0.5]))
-    terrain_visible = np.ones(5, dtype=bool)  # flat terrain, all visible
+    terrain_visible = np.ones(5, dtype=bool)
 
     beam_within = (target_angles >= np.radians(-90.0)) & (target_angles <= np.radians(2.0))
     combined_mask = terrain_visible & beam_within
@@ -90,27 +95,27 @@ def test_beam_gate_min_angle_excludes_below_horizon():
     beam_within = (target_angles >= np.radians(1.0)) & (target_angles <= np.radians(90.0))
     combined_mask = terrain_visible & beam_within
 
-    assert combined_mask[0]       # 5° → included
-    assert combined_mask[1]       # 2° → included
+    assert combined_mask[0]
+    assert combined_mask[1]
     assert combined_mask[2]       # exactly 1° → included
-    assert not combined_mask[3]   # 0.5° < 1° min beam → excluded
-    assert not combined_mask[4]   # -1° < 1° min beam → excluded
+    assert not combined_mask[3]   # 0.5° < min → excluded
+    assert not combined_mask[4]   # -1° < min → excluded
 
 
 def test_shadow_uses_terrain_visible_not_combined_mask():
     """Shadow extraction must use terrain_visible alone, not combined_mask."""
     target_angles = np.radians(np.array([10.0, 1.0, 0.5]))
-    horizon_angles = np.radians(np.array([0.0, 0.0, 2.0]))  # blocked at bin 2
+    horizon_angles = np.radians(np.array([0.0, 0.0, 2.0]))
 
     terrain_visible = target_angles >= horizon_angles
     beam_within = (target_angles >= np.radians(-90.0)) & (target_angles <= np.radians(2.0))
     combined_mask = terrain_visible & beam_within
 
-    # bin 0: terrain_visible=True, beam_within=False (10° > 2° max)
+    # bin 0: terrain visible, but beam excluded (10° > 2° max) — NOT shadow
     assert terrain_visible[0] == True
-    assert combined_mask[0] == False   # beam excluded — NOT terrain blocked
-    # bin 2: terrain blocked, not beam-excluded
-    assert terrain_visible[2] == False  # terrain blocked → goes to shadow
+    assert combined_mask[0] == False
+    # bin 2: terrain blocked → goes to shadow regardless of beam
+    assert terrain_visible[2] == False
     assert combined_mask[2] == False
 
 
@@ -118,19 +123,12 @@ def test_shadow_uses_terrain_visible_not_combined_mask():
 # MapView._build_coverage_features — new dict format
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def qapp():
-    """Minimal QApplication fixture for GUI tests."""
-    from PyQt6.QtWidgets import QApplication
-    import sys
-    app = QApplication.instance() or QApplication(sys.argv)
-    return app
-
-
-def test_build_coverage_features_reads_outer_ring(qapp):
+def test_build_coverage_features_reads_outer_ring():
     """_build_coverage_features reads {"outer": [...], "inner": None} format."""
-    from gui.map_view import MapView
-    view = MapView()
+    _mv = _load("src/gui/map_view.py", "map_view")
+    MapView = _mv.MapView
+    view = object.__new__(MapView)   # bypass __init__ (no Qt needed for this method)
+    view._coverage_opacity_factor = 1.0
 
     outer = [(51.0, 0.0), (51.1, 0.1), (51.0, 0.2), (50.9, 0.1)]
     coverage_data = {100.0: {"outer": outer, "inner": None}}
@@ -139,16 +137,17 @@ def test_build_coverage_features_reads_outer_ring(qapp):
 
     assert len(features) == 1
     latlngs = features[0]["latlngs"]
-    # Single ring: latlngs is a list-of-rings where each ring is [[lat, lon], ...]
     assert isinstance(latlngs, list)
-    assert len(latlngs) == 1                         # one ring, no donut
-    assert isinstance(latlngs[0][0], list)           # [[lat, lon], ...]
+    assert len(latlngs) == 1              # one ring, no donut
+    assert isinstance(latlngs[0][0], list)   # [[lat, lon], ...]
 
 
-def test_build_coverage_features_produces_two_rings_when_inner_given(qapp):
+def test_build_coverage_features_produces_two_rings_when_inner_given():
     """_build_coverage_features appends inner ring when inner coords provided."""
-    from gui.map_view import MapView
-    view = MapView()
+    _mv = _load("src/gui/map_view.py", "map_view")
+    MapView = _mv.MapView
+    view = object.__new__(MapView)
+    view._coverage_opacity_factor = 1.0
 
     outer = [(51.0, 0.0), (51.1, 0.1), (51.0, 0.2), (50.9, 0.1)]
     inner = [(51.0, 0.01), (51.05, 0.05), (51.0, 0.09), (50.95, 0.05)]
