@@ -134,31 +134,51 @@ class MapView(QWidget):
         Convert coverage_data dict into a list of feature dicts used by
         _generate_leaflet_html.
 
-        Each feature: {height_m, area_km2, latlngs: [[lat, lon], ...]}
+        Each feature: {height_m, area_km2, latlngs: [outerRing, ...optionalInnerRing]}
+        latlngs is always a list-of-rings so L.polygon() renders a donut when two
+        rings are present.
 
         Args:
-            coverage_data: {height_m: [(lat, lon), ...]}  — ring may or may not be closed
+            coverage_data: {height_m: {"outer": [(lat, lon), ...], "inner": [...] or None}}
+                           Also accepts legacy format {height_m: [(lat, lon), ...]}
         """
         features = []
-        for height_m, coords in coverage_data.items():
-            coords_list = list(coords)
-            if not coords_list:
+        for height_m, band_data in coverage_data.items():
+            # Support both new dict format and legacy list format
+            if isinstance(band_data, dict):
+                outer_coords = list(band_data.get("outer", []))
+                inner_coords = band_data.get("inner")
+            else:
+                outer_coords = list(band_data)
+                inner_coords = None
+
+            if not outer_coords:
                 continue
 
-            # Drop the closing duplicate if present (Leaflet auto-closes polygons)
-            if len(coords_list) > 1 and coords_list[0] == coords_list[-1]:
-                coords_list = coords_list[:-1]
+            # Drop closing duplicate if present (Leaflet auto-closes polygons)
+            if len(outer_coords) > 1 and outer_coords[0] == outer_coords[-1]:
+                outer_coords = outer_coords[:-1]
 
-            if len(coords_list) < 3:
+            if len(outer_coords) < 3:
                 continue
 
-            area_km2 = self._compute_polygon_area_km2(coords_list)
+            area_km2 = self._compute_polygon_area_km2(outer_coords)
+
+            # latlngs is a list of rings: first ring = outer, optional second = inner hole
+            outer_ring = [[c[0], c[1]] for c in outer_coords]
+            latlngs = [outer_ring]
+
+            if inner_coords and len(inner_coords) >= 3:
+                inner_list = list(inner_coords)
+                if len(inner_list) > 1 and inner_list[0] == inner_list[-1]:
+                    inner_list = inner_list[:-1]
+                if len(inner_list) >= 3:
+                    latlngs.append([[c[0], c[1]] for c in inner_list])
 
             features.append({
                 "height_m": float(height_m),
                 "area_km2": area_km2,
-                # Leaflet L.polygon takes [[lat, lon], ...] (no closing point needed)
-                "latlngs": [[c[0], c[1]] for c in coords_list],
+                "latlngs": latlngs,
             })
 
         # Sort: highest height first (drawn below lower bands so they don't obscure them)

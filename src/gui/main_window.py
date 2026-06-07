@@ -156,6 +156,10 @@ class ComputationWorker(QThread):
             # height_bands_m are AGL → target AMSL = site_elevation + height_agl
             heights_agl = req.height_bands_m
             coverage_ranges_m = {h: np.zeros(n_az, dtype=np.float64) for h in heights_agl}
+            inner_ranges_m    = {h: np.zeros(n_az, dtype=np.float64) for h in heights_agl}
+
+            min_beam_rad = np.radians(req.min_beam_deg)
+            max_beam_rad = np.radians(req.max_beam_deg)
 
             _min_h_agl = min(heights_agl) if heights_agl else None
             all_shadow_segments = []   # list of (az_deg, inner_r_m, outer_r_m)
@@ -224,22 +228,33 @@ class ComputationWorker(QThread):
                         ranges
                     )
 
-                    # Visible where target angle >= cumulative horizon (skip bin 0 = antenna)
-                    visible_mask = target_angles[1:] >= horizon_angles[1:]
-                    visible_idx  = np.where(visible_mask)[0]
+                    # Gate 1: terrain visibility (cumulative horizon)
+                    terrain_visible = target_angles[1:] >= horizon_angles[1:]
+                    # Gate 2: beam elevation window (transparent at ±90° defaults)
+                    beam_within = (
+                        (target_angles[1:] >= min_beam_rad) &
+                        (target_angles[1:] <= max_beam_rad)
+                    )
+                    combined_mask = terrain_visible & beam_within
+                    visible_idx   = np.where(combined_mask)[0]
 
-                    # Use LAST visible bin as coverage range (outer boundary).
-                    # First-blocked gives the near-range mountain shadow (e.g. Teide
-                    # slope at 5 km), not the outer coverage limit (ocean at 79 km).
+                    # Outer boundary: last combined-visible bin.
+                    # Inner boundary: first combined-visible bin (donut hole when beam
+                    # angles constrain near-range targets).
                     if len(visible_idx) > 0:
                         max_r = float(ranges[1:][visible_idx[-1]])
+                        min_r = float(ranges[1:][visible_idx[0]])
                     else:
-                        max_r = float(ranges[1])   # nothing visible: one step
+                        max_r = float(ranges[1])
+                        min_r = float(ranges[1])
 
                     coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
+                    inner_ranges_m[h_agl][i]    = min_r
 
+                    # Shadow uses terrain_visible only — beam exclusion is not
+                    # terrain blocking and must not generate shadow wedges.
                     if h_agl == _min_h_agl:
-                        segs = extract_blocked_segments(visible_mask, ranges, az)
+                        segs = extract_blocked_segments(terrain_visible, ranges, az)
                         all_shadow_segments.extend(segs)
 
                 if i % 20 == 0:
@@ -278,24 +293,42 @@ class ComputationWorker(QThread):
                 "horizon": horizon_angles_deg.tolist(),
             }
 
-            # Map coverage data: {height_m: [(lat, lon), ...]} for each height band
-            # Build a closed polygon ring using GEOD.fwd to turn (azimuth, range) → (lat, lon)
+            # Map coverage data: {height_m: {"outer": [...], "inner": [...] or None}}
+            # "outer" = outer coverage boundary; "inner" = donut hole (None when ±90° defaults).
             coverage_data = {}
             for h in heights_agl:
+                # Outer ring
                 ranges_h = coverage_ranges_m[h]
-                # Replace any zero-range azimuths with a tiny offset so the polygon isn't degenerate
                 ranges_h = np.where(ranges_h < RANGE_STEP_M, RANGE_STEP_M, ranges_h)
-
                 lons_p, lats_p, _ = GEOD.fwd(
                     np.full(n_az, ant_lon),
                     np.full(n_az, ant_lat),
                     azimuths,
                     ranges_h
                 )
-                # Wrap around: first point appended to close the ring
                 lat_list = lats_p.tolist() + [lats_p[0]]
                 lon_list = lons_p.tolist() + [lons_p[0]]
-                coverage_data[h] = list(zip(lat_list, lon_list))
+                outer = list(zip(lat_list, lon_list))
+
+                # Inner ring: only when min_beam_deg departs from the -90° default,
+                # meaning close-in targets are actively excluded by beam angle.
+                inner = None
+                if req.min_beam_deg > -89.9:
+                    inner_r_arr = inner_ranges_m[h].copy()
+                    inner_r_arr = np.where(inner_r_arr < RANGE_STEP_M, RANGE_STEP_M, inner_r_arr)
+                    if float(np.max(inner_r_arr)) > RANGE_STEP_M:
+                        i_lons, i_lats, _ = GEOD.fwd(
+                            np.full(n_az, ant_lon),
+                            np.full(n_az, ant_lat),
+                            azimuths,
+                            inner_r_arr
+                        )
+                        inner = list(zip(
+                            i_lats.tolist() + [i_lats[0]],
+                            i_lons.tolist() + [i_lons[0]]
+                        ))
+
+                coverage_data[h] = {"outer": outer, "inner": inner}
 
             self.coverage_computed.emit(coverage_data)
             self.polar_data_ready.emit(polar_data)
@@ -608,7 +641,8 @@ class MainWindow(QMainWindow):
                 from shapely.geometry import Polygon
                 geod = Geod(ellps='WGS84')
                 largest_h = max(coverage_data.keys())
-                coords = coverage_data[largest_h]
+                band = coverage_data[largest_h]
+                coords = band["outer"] if isinstance(band, dict) else band
                 if len(coords) >= 3:
                     # shapely Polygon takes (lon, lat); coords are (lat, lon)
                     poly = Polygon([(c[1], c[0]) for c in coords])
@@ -686,7 +720,8 @@ class MainWindow(QMainWindow):
 
                 # Build a merged FeatureCollection from all height bands
                 all_geojsons = []
-                for height_m, coords in self._last_coverage_data.items():
+                for height_m, band_data in self._last_coverage_data.items():
+                    coords = band_data["outer"] if isinstance(band_data, dict) else band_data
                     if len(coords) < 3:
                         continue
                     lats = [c[0] for c in coords]
