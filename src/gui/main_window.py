@@ -545,6 +545,8 @@ class MainWindow(QMainWindow):
         right_splitter.addWidget(self.polar_view)
         right_splitter.setStretchFactor(0, 70)
         right_splitter.setStretchFactor(1, 30)
+        right_splitter.setSizes([600, 280])
+        right_splitter.setCollapsible(1, False)
 
         main_splitter.addWidget(right_splitter)
         main_splitter.setStretchFactor(0, 0)  # Control panel: fixed

@@ -69,6 +69,8 @@ class PolarView(QWidget):
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas)
 
+        self.setMinimumHeight(200)
+
     def _style_toolbar(self):
         """Apply dark theme to toolbar."""
         self.toolbar.setStyleSheet(f"""
@@ -115,8 +117,8 @@ class PolarView(QWidget):
         # Labels
         self.ax.set_xlabel("Azimuth (°)", color=ACCENT_TEXT, labelpad=20)
         self.ax.set_ylabel("Range (km)", color=ACCENT_TEXT, labelpad=40)
-        self.ax.set_title("Coverage Diagram (OVD)", color=ACCENT_TEXT, pad=20, fontsize=12, fontweight='bold')
-
+        self.ax.set_title("Coverage Diagram (OVD)", color=ACCENT_TEXT, pad=8, fontsize=11, fontweight='bold')
+        self.fig.tight_layout(pad=0.5)
         self.canvas.draw()
 
     def update_data(self, polar_data: dict):
@@ -186,7 +188,7 @@ class PolarView(QWidget):
         # Labels
         self.ax.set_xlabel("Azimuth (°)", color=ACCENT_TEXT, labelpad=20, fontsize=10)
         self.ax.set_ylabel("Range (km)", color=ACCENT_TEXT, labelpad=40, fontsize=10)
-        self.ax.set_title("Coverage Diagram (OVD)", color=ACCENT_TEXT, pad=20, fontsize=12, fontweight='bold')
+        self.ax.set_title("Coverage Diagram (OVD)", color=ACCENT_TEXT, pad=8, fontsize=11, fontweight='bold')
 
         # Legend with dark background
         legend = self.ax.legend(
@@ -201,6 +203,7 @@ class PolarView(QWidget):
                 text.set_color(ACCENT_TEXT)
 
         # Redraw canvas
+        self.fig.tight_layout(pad=0.5)
         self.canvas.draw()
 
     def select_height_band(self, height_m: float):
