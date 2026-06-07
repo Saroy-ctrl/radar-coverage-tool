@@ -64,6 +64,8 @@ class ComputationRequest:
     obstructions_path: str = None
     azimuth_step_deg: float = 2.0
     range_step_m: float = 200.0
+    min_beam_deg: float = -90.0
+    max_beam_deg: float = 90.0
 
 
 class ControlPanel(QWidget):
@@ -230,6 +232,26 @@ class ControlPanel(QWidget):
             "Polygon: shapely-merged smooth blobs (slower, better quality)."
         )
 
+        # === Beam Angles Group ===
+        self.label_min_beam = QLabel("Min beam angle (°):")
+        self.spin_min_beam = QDoubleSpinBox()
+        self.spin_min_beam.setRange(-90.0, 90.0)
+        self.spin_min_beam.setValue(-90.0)
+        self.spin_min_beam.setDecimals(1)
+        self.spin_min_beam.setSingleStep(0.5)
+        self.spin_min_beam.setToolTip("Minimum radar beam elevation angle (negative = below horizon)")
+
+        self.label_max_beam = QLabel("Max beam angle (°):")
+        self.spin_max_beam = QDoubleSpinBox()
+        self.spin_max_beam.setRange(-90.0, 90.0)
+        self.spin_max_beam.setValue(90.0)
+        self.spin_max_beam.setDecimals(1)
+        self.spin_max_beam.setSingleStep(0.5)
+        self.spin_max_beam.setToolTip("Maximum radar beam elevation angle")
+
+        self.label_beam_error = QLabel("")
+        self.label_beam_error.setStyleSheet("color: #ff4444; font-size: 11px;")
+
     def _populate_height_bands_table(self):
         """Populate height bands table with default heights."""
         self.table_heights.setRowCount(len(HEIGHT_BANDS))
@@ -354,6 +376,21 @@ class ControlPanel(QWidget):
         group_heights.setLayout(gh_layout)
         layout.addWidget(group_heights)
 
+        # === Beam Angles Group ===
+        group_beam = QGroupBox("Beam Elevation Angles")
+        gb_layout = QVBoxLayout()
+        beam_min_row = QHBoxLayout()
+        beam_min_row.addWidget(self.label_min_beam)
+        beam_min_row.addWidget(self.spin_min_beam)
+        gb_layout.addLayout(beam_min_row)
+        beam_max_row = QHBoxLayout()
+        beam_max_row.addWidget(self.label_max_beam)
+        beam_max_row.addWidget(self.spin_max_beam)
+        gb_layout.addLayout(beam_max_row)
+        gb_layout.addWidget(self.label_beam_error)
+        group_beam.setLayout(gb_layout)
+        layout.addWidget(group_beam)
+
         # === DEM Source Group ===
         group_dem = QGroupBox("DEM File")
         gd_layout = QVBoxLayout()
@@ -464,6 +501,14 @@ class ControlPanel(QWidget):
         if self.is_computing:
             return
 
+        # Validate beam angles
+        min_beam = self.spin_min_beam.value()
+        max_beam = self.spin_max_beam.value()
+        if min_beam >= max_beam:
+            self.label_beam_error.setText("Min must be less than max.")
+            return
+        self.label_beam_error.setText("")
+
         # Gather parameters
         site_elev = self.spin_site_elev.value()
         az_step, rng_step = self._get_resolution_params()
@@ -480,6 +525,8 @@ class ControlPanel(QWidget):
             obstructions_path=self.obstructions_path,
             azimuth_step_deg=az_step,
             range_step_m=rng_step,
+            min_beam_deg=min_beam,
+            max_beam_deg=max_beam,
         )
 
         # Update UI state
