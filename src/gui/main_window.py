@@ -673,6 +673,7 @@ class MainWindow(QMainWindow):
         """Handle computation error."""
         self.label_status.setText("Error")
         self.progress_bar.setVisible(False)
+        self.control_panel.set_computing_finished()
         QMessageBox.critical(self, "Computation Error", error_msg)
 
     def _on_computation_finished(self):
