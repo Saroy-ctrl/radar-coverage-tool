@@ -47,7 +47,7 @@ class MapView(QWidget):
         self.coverage_data = {}
         self._shadow_features = []      # pre-built wedge list, rebuilt on set_shadow_data
         self._coverage_opacity_factor = 1.0   # multiplier for all band opacities (0.0–1.0)
-        self._shadow_opacity = 0.5            # absolute opacity for shadow polylines (0.0–1.0)
+        self._shadow_opacity = 0.55           # absolute opacity for shadow polylines (0.0–1.0)
         self._max_range_m = 0.0               # set from shadow payload; drives range rings
         self._shadow_mode = "Wedge"           # "Wedge" | "Polygon"
         self._shadow_geojson = None           # stored GeoJSON dict for polygon mode
