@@ -423,6 +423,41 @@ class MainWindow(QMainWindow):
             QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
                 border: 2px solid {ACCENT_BLUE};
             }}
+            QSpinBox::up-button, QDoubleSpinBox::up-button {{
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 18px;
+                background-color: #4a4a5e;
+                border-left: 1px solid #555;
+                border-bottom: 1px solid #555;
+                border-top-right-radius: 3px;
+            }}
+            QSpinBox::down-button, QDoubleSpinBox::down-button {{
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 18px;
+                background-color: #4a4a5e;
+                border-left: 1px solid #555;
+                border-bottom-right-radius: 3px;
+            }}
+            QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+            QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+                background-color: {ACCENT_BLUE};
+            }}
+            QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+                width: 6px;
+                height: 6px;
+                border-left: 3px solid transparent;
+                border-right: 3px solid transparent;
+                border-bottom: 5px solid #e8e8e8;
+            }}
+            QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+                width: 6px;
+                height: 6px;
+                border-left: 3px solid transparent;
+                border-right: 3px solid transparent;
+                border-top: 5px solid #e8e8e8;
+            }}
             QGroupBox {{
                 color: #e8e8e8;
                 border: 1px solid #555;
