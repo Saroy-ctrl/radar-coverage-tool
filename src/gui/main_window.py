@@ -55,7 +55,6 @@ class ComputationWorker(QThread):
     def run(self):
         """Execute computation in background thread using real backend engines."""
         try:
-            import time as _time
             import numpy as np
             import rasterio
             from pyproj import Geod
