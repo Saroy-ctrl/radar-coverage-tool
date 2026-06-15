@@ -6,7 +6,7 @@ Responsibilities:
 - Split layout: left=control_panel, center/right=map+polar views
 - QThread worker for background computation
 - Signal coordination between control_panel → worker → views
-- Status bar: antenna height, coverage area, void %
+- Status bar: antenna height, progress, status message
 - Menu bar: File (Load DEM, Export), View (theme toggle)
 - Never blocks main thread during computation
 """
@@ -607,14 +607,6 @@ class MainWindow(QMainWindow):
         self.label_antenna_height = QLabel("Antenna: 0 m AMSL")
         self.status_bar.addWidget(self.label_antenna_height)
 
-        # Coverage area label
-        self.label_coverage_area = QLabel("Coverage area: — km²")
-        self.status_bar.addWidget(self.label_coverage_area)
-
-        # Void percentage label
-        self.label_void_pct = QLabel("Void fill: — %")
-        self.status_bar.addWidget(self.label_void_pct)
-
         # Progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumWidth(200)
@@ -663,26 +655,6 @@ class MainWindow(QMainWindow):
         """Receive coverage polygons from worker."""
         self._last_coverage_data = coverage_data
         self.map_view.update_coverage(coverage_data)
-
-        # Compute area of largest polygon (highest coverage height)
-        if coverage_data:
-            try:
-                from pyproj import Geod
-                from shapely.geometry import Polygon
-                geod = Geod(ellps='WGS84')
-                largest_h = max(coverage_data.keys())
-                band = coverage_data[largest_h]
-                coords = band["outer"] if isinstance(band, dict) else band
-                if len(coords) >= 3:
-                    # shapely Polygon takes (lon, lat); coords are (lat, lon)
-                    poly = Polygon([(c[1], c[0]) for c in coords])
-                    area_m2, _ = geod.geometry_area_perimeter(poly)
-                    area_km2 = abs(area_m2) / 1e6
-                    self.label_coverage_area.setText(f"Coverage area: {area_km2:.0f} km²")
-                else:
-                    self.label_coverage_area.setText("Coverage area: — km²")
-            except Exception:
-                self.label_coverage_area.setText("Coverage area: — km²")
 
     def _on_polar_data_ready(self, polar_data: dict):
         """Receive polar diagram data from worker."""
