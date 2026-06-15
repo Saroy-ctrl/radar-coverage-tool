@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QSlider, QPushButton, QCheckBox, QFileDialog,
     QProgressBar, QComboBox, QLineEdit, QScrollArea
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
 
 
@@ -64,6 +64,15 @@ class ControlPanel(QWidget):
     coverage_opacity_changed = pyqtSignal(float)
     shadow_opacity_changed = pyqtSignal(float)
     shadow_mode_changed = pyqtSignal(str)
+
+    # Top-K Site Finder signals
+    find_top_k_requested = pyqtSignal(float, float, float, float, int, int)
+    #                                  min_lat min_lon max_lat max_lon k step_m
+    # PyQt6 signals cannot carry tuple — bbox passed as 4 individual floats.
+    draw_bbox_requested   = pyqtSignal()
+    cancel_optimization   = pyqtSignal()
+    load_site_requested   = pyqtSignal(float, float)   # (lat, lon)
+    bbox_changed          = pyqtSignal(float, float, float, float)  # min_lat,min_lon,max_lat,max_lon
 
     def __init__(self):
         super().__init__()
@@ -237,6 +246,64 @@ class ControlPanel(QWidget):
         self.label_beam_error = QLabel("")
         self.label_beam_error.setStyleSheet("color: #ff4444; font-size: 11px;")
 
+        # === Top-K Site Finder Group ===
+        # Bounding box spinboxes
+        self.spin_bbox_min_lat = QDoubleSpinBox()
+        self.spin_bbox_min_lat.setRange(-90.0, 90.0)
+        self.spin_bbox_min_lat.setDecimals(4)
+        self.spin_bbox_min_lat.setValue(51.0)
+        self.spin_bbox_min_lat.setSuffix("° N")
+
+        self.spin_bbox_max_lat = QDoubleSpinBox()
+        self.spin_bbox_max_lat.setRange(-90.0, 90.0)
+        self.spin_bbox_max_lat.setDecimals(4)
+        self.spin_bbox_max_lat.setValue(51.5)
+        self.spin_bbox_max_lat.setSuffix("° N")
+
+        self.spin_bbox_min_lon = QDoubleSpinBox()
+        self.spin_bbox_min_lon.setRange(-180.0, 180.0)
+        self.spin_bbox_min_lon.setDecimals(4)
+        self.spin_bbox_min_lon.setValue(0.0)
+        self.spin_bbox_min_lon.setSuffix("° E")
+
+        self.spin_bbox_max_lon = QDoubleSpinBox()
+        self.spin_bbox_max_lon.setRange(-180.0, 180.0)
+        self.spin_bbox_max_lon.setDecimals(4)
+        self.spin_bbox_max_lon.setValue(0.5)
+        self.spin_bbox_max_lon.setSuffix("° E")
+
+        self.btn_draw_bbox = QPushButton("Draw Rectangle on Map")
+        self.btn_draw_bbox.clicked.connect(self._on_draw_bbox_clicked)
+
+        self.spin_top_k = QSpinBox()
+        self.spin_top_k.setRange(1, 20)
+        self.spin_top_k.setValue(5)
+        self.spin_top_k.setPrefix("Top ")
+        self.spin_top_k.setSuffix(" sites")
+
+        self.spin_grid_step = QSpinBox()
+        self.spin_grid_step.setRange(250, 2000)
+        self.spin_grid_step.setSingleStep(250)
+        self.spin_grid_step.setValue(1000)
+        self.spin_grid_step.setSuffix(" m grid")
+
+        self.btn_find_top_k = QPushButton("Find Top-K Sites")
+        self.btn_find_top_k.clicked.connect(self._on_find_top_k_clicked)
+
+        self.btn_cancel_optimization = QPushButton("Cancel Search")
+        self.btn_cancel_optimization.setVisible(False)
+        self.btn_cancel_optimization.clicked.connect(lambda: self.cancel_optimization.emit())
+
+        self.progress_bar_optimization = QProgressBar()
+        self.progress_bar_optimization.setRange(0, 100)
+        self.progress_bar_optimization.setValue(0)
+        self.progress_bar_optimization.setVisible(False)
+
+        self.results_widget = QWidget()
+        self._results_layout = QVBoxLayout(self.results_widget)
+        self._results_layout.setSpacing(4)
+        self._results_layout.setContentsMargins(0, 0, 0, 0)
+
 
     def _create_layout(self):
         """Wrap all inputs in a QScrollArea so the panel is usable on short screens."""
@@ -372,6 +439,46 @@ class ControlPanel(QWidget):
         layout.addWidget(self.btn_export_geojson)
         layout.addWidget(self.btn_export_png)
 
+        # === Top-K Site Finder Group ===
+        group_topk = QGroupBox("Top-K Site Finder")
+        gt_layout = QVBoxLayout()
+
+        # Bounding box
+        gt_layout.addWidget(QLabel("Search Bounding Box:"))
+        bbox_row1 = QHBoxLayout()
+        bbox_row1.addWidget(QLabel("Min Lat:"))
+        bbox_row1.addWidget(self.spin_bbox_min_lat)
+        bbox_row1.addWidget(QLabel("Max Lat:"))
+        bbox_row1.addWidget(self.spin_bbox_max_lat)
+        gt_layout.addLayout(bbox_row1)
+
+        bbox_row2 = QHBoxLayout()
+        bbox_row2.addWidget(QLabel("Min Lon:"))
+        bbox_row2.addWidget(self.spin_bbox_min_lon)
+        bbox_row2.addWidget(QLabel("Max Lon:"))
+        bbox_row2.addWidget(self.spin_bbox_max_lon)
+        gt_layout.addLayout(bbox_row2)
+
+        gt_layout.addWidget(self.btn_draw_bbox)
+
+        # Settings row
+        settings_row = QHBoxLayout()
+        settings_row.addWidget(self.spin_top_k)
+        settings_row.addWidget(self.spin_grid_step)
+        gt_layout.addLayout(settings_row)
+
+        # Action buttons
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.btn_find_top_k)
+        btn_row.addWidget(self.btn_cancel_optimization)
+        gt_layout.addLayout(btn_row)
+
+        gt_layout.addWidget(self.progress_bar_optimization)
+        gt_layout.addWidget(self.results_widget)
+
+        group_topk.setLayout(gt_layout)
+        layout.addWidget(group_topk)
+
         layout.addStretch()
 
         scroll.setWidget(inner)
@@ -383,6 +490,14 @@ class ControlPanel(QWidget):
         self.slider_diffraction.valueChanged.connect(self._on_diffraction_changed)
         self.slider_coverage_opacity.valueChanged.connect(self._on_coverage_opacity_changed)
         self.slider_shadow_opacity.valueChanged.connect(self._on_shadow_opacity_changed)
+
+        # Bbox spinbox debounce: update map rectangle 300ms after user stops typing
+        self._bbox_debounce_timer = QTimer(self)
+        self._bbox_debounce_timer.setSingleShot(True)
+        self._bbox_debounce_timer.timeout.connect(self._emit_bbox_changed)
+        for sb in (self.spin_bbox_min_lat, self.spin_bbox_max_lat,
+                   self.spin_bbox_min_lon, self.spin_bbox_max_lon):
+            sb.valueChanged.connect(lambda _: self._bbox_debounce_timer.start(300))
 
     def _on_k_factor_changed(self, value):
         """Update K-factor display."""
@@ -490,5 +605,107 @@ class ControlPanel(QWidget):
         """Called by main window when computation finishes."""
         self.is_computing = False
         self.btn_compute.setEnabled(True)
+
+    # ------------------------------------------------------------------ #
+    # Top-K Site Finder methods                                            #
+    # ------------------------------------------------------------------ #
+
+    def _on_draw_bbox_clicked(self):
+        """Request map to enter rectangle draw mode."""
+        self.draw_bbox_requested.emit()
+
+    def _on_find_top_k_clicked(self):
+        """Validate bbox and emit find_top_k_requested."""
+        min_lat = self.spin_bbox_min_lat.value()
+        max_lat = self.spin_bbox_max_lat.value()
+        min_lon = self.spin_bbox_min_lon.value()
+        max_lon = self.spin_bbox_max_lon.value()
+        if min_lat >= max_lat or min_lon >= max_lon:
+            return  # silently ignore degenerate bbox
+        self.find_top_k_requested.emit(
+            min_lat, min_lon, max_lat, max_lon,
+            self.spin_top_k.value(),
+            self.spin_grid_step.value(),
+        )
+
+    def _emit_bbox_changed(self):
+        self.bbox_changed.emit(
+            self.spin_bbox_min_lat.value(),
+            self.spin_bbox_min_lon.value(),
+            self.spin_bbox_max_lat.value(),
+            self.spin_bbox_max_lon.value(),
+        )
+
+    def set_bbox(self, min_lat: float, min_lon: float, max_lat: float, max_lon: float):
+        """Update bbox spinboxes from map draw event (called by MainWindow)."""
+        self.spin_bbox_min_lat.setValue(min_lat)
+        self.spin_bbox_max_lat.setValue(max_lat)
+        self.spin_bbox_min_lon.setValue(min_lon)
+        self.spin_bbox_max_lon.setValue(max_lon)
+
+    def set_optimization_state(self, running: bool):
+        """Toggle between Find / Cancel + progress bar."""
+        self.btn_find_top_k.setVisible(not running)
+        self.btn_cancel_optimization.setVisible(running)
+        self.progress_bar_optimization.setVisible(running)
+        if not running:
+            self.progress_bar_optimization.setValue(0)
+
+    def show_optimization_results(self, top_k: list):
+        """
+        Populate results_widget with ranked rows.
+        top_k: [(lat, lon, score_km2), ...] sorted best-first
+        """
+        # Clear previous results
+        while self._results_layout.count():
+            item = self._results_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for rank, (lat, lon, score) in enumerate(top_k, start=1):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            rank_label = QLabel(f"#{rank}")
+            rank_label.setMinimumWidth(24)
+            coord_label = QLabel(f"{lat:.3f}°N {lon:.3f}°E")
+            score_label = QLabel(f"{score:.0f} km²")
+            score_label.setMinimumWidth(64)
+            load_btn = QPushButton("Load")
+            load_btn.setMaximumWidth(50)
+            _lat, _lon = lat, lon   # capture for lambda
+            load_btn.clicked.connect(lambda checked, la=_lat, lo=_lon: self.load_site_requested.emit(la, lo))
+            row.addWidget(rank_label)
+            row.addWidget(coord_label)
+            row.addWidget(score_label)
+            row.addWidget(load_btn)
+            row_widget = QWidget()
+            row_widget.setLayout(row)
+            self._results_layout.addWidget(row_widget)
+
+    def set_radar_position(self, lat: float, lon: float):
+        """Update the radar lat/lon spinboxes (called when loading a top-K site)."""
+        self.spin_lat.setValue(lat)
+        self.spin_lon.setValue(lon)
+
+    def build_request(self):
+        """
+        Build a ComputationRequest from current panel state.
+        Used by OptimizationWorker as a template (it overrides lat/lon + resolution).
+        """
+        site_elev = self.spin_site_elev.value()
+        return ComputationRequest(
+            radar_lat=self.spin_lat.value(),
+            radar_lon=self.spin_lon.value(),
+            site_elevation_amsl_m=float(site_elev),
+            antenna_amsl_m=float(site_elev + self.spin_mast_height.value() + self.spin_antenna_height.value()),
+            k_factor=self.slider_k_factor.value() / 100.0,
+            max_range_km=self.spin_max_range.value(),
+            height_bands_m=self._get_selected_height_bands(),
+            diffraction_guard_deg=self.slider_diffraction.value() * 0.1,
+            dem_path=self.dem_path,
+            obstructions_path=self.obstructions_path,
+            min_beam_deg=self.spin_min_beam.value(),
+            max_beam_deg=self.spin_max_beam.value(),
+        )
 
 
