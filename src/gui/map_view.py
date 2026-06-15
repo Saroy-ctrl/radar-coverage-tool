@@ -20,7 +20,12 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtCore import QUrl, QObject, pyqtSlot, pyqtSignal
-from PyQt6.QtWebChannel import QWebChannel
+try:
+    from PyQt6.QtWebChannel import QWebChannel as _QWebChannel
+    _HAS_WEBCHANNEL = True
+except Exception:
+    _QWebChannel = None
+    _HAS_WEBCHANNEL = False
 
 # Height band colors (Cambridge Pixel convention)
 HEIGHT_BAND_COLORS = {
@@ -76,11 +81,16 @@ class MapView(QWidget):
         # Fixed temp file path — overwritten cleanly each render
         self._tmp_path = Path(tempfile.gettempdir()) / "radar_map_view.html"
 
-        # QWebChannel bridge: lets JS call Python methods (bbox draw, marker click)
+        # QWebChannel bridge: lets JS call Python methods (bbox draw, marker click).
+        # QWebChannel is optional — if the DLL is unavailable the bridge is skipped
+        # and the Top-K JS features degrade silently; the rest of the map still works.
         self._bridge = MapBridge(self)
-        self._channel = QWebChannel(self.web_engine.page())
-        self._channel.registerObject("bridge", self._bridge)
-        self.web_engine.page().setWebChannel(self._channel)
+        if _HAS_WEBCHANNEL:
+            self._channel = _QWebChannel(self.web_engine.page())
+            self._channel.registerObject("bridge", self._bridge)
+            self.web_engine.page().setWebChannel(self._channel)
+        else:
+            self._channel = None
 
         # Top-K and bbox state — persisted here so _render_map() always includes them
         self._top_k_sites: list = []  # [(lat, lon, score_km2), ...] or []
@@ -324,9 +334,10 @@ L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
 
     def _generate_bbox_js(self) -> str:
         """Generate JS to draw the bbox rectangle if one is set."""
-        if self._bbox is None:
+        bbox = getattr(self, '_bbox', None)
+        if bbox is None:
             return ""
-        min_lat, min_lon, max_lat, max_lon = self._bbox
+        min_lat, min_lon, max_lat, max_lon = bbox
         return (
             f"L.rectangle([[{min_lat},{min_lon}],[{max_lat},{max_lon}]], "
             f"{{color:'#4488ff',weight:2,fill:false,dashArray:'6 4',interactive:false}}"
@@ -335,7 +346,7 @@ L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
 
     def _generate_top_k_js(self) -> str:
         """Generate JS to draw top-K ranked circle markers."""
-        if not self._top_k_sites:
+        if not getattr(self, '_top_k_sites', None):
             return ""
         colors = ["'#ffd700'", "'#c0c0c0'", "'#cd7f32'"]
         blocks = []
