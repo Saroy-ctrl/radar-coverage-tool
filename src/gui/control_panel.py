@@ -13,6 +13,7 @@ Responsibilities:
 - Signal: compute_requested(ComputationRequest) → main_window
 """
 
+import math
 from dataclasses import dataclass
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QDoubleSpinBox,
@@ -645,7 +646,6 @@ class ControlPanel(QWidget):
         self._update_site_estimate()
 
     def _update_site_estimate(self):
-        import math
         step_m = self.spin_grid_step.value()
         min_lat = self.spin_bbox_min_lat.value()
         max_lat = self.spin_bbox_max_lat.value()
@@ -654,7 +654,7 @@ class ControlPanel(QWidget):
         if max_lat > min_lat and max_lon > min_lon and step_m > 0:
             lat_c = math.radians((min_lat + max_lat) / 2)
             n_rows = max(1, int((max_lat - min_lat) / (step_m / 111_000)) + 1)
-            n_cols = max(1, int((max_lon - min_lon) / (step_m / (111_000 * math.cos(lat_c)))) + 1)
+            n_cols = max(1, int((max_lon - min_lon) / (step_m / (111_000 * max(0.01, math.cos(lat_c)))) ) + 1)
             n = n_rows * n_cols
             self.label_site_estimate.setText(f"~{n} candidate sites")
         else:
