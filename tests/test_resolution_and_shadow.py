@@ -1,4 +1,4 @@
-"""Tests for resolution preset mapping and ComputationRequest fields."""
+"""Tests for ComputationRequest fields and shadow rendering."""
 import sys
 import os
 
@@ -6,7 +6,7 @@ import os
 # imports main_window → would pull in more Qt modules even with mocks).
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'gui')))
 
-from control_panel import ComputationRequest, RESOLUTION_PRESETS
+from control_panel import ComputationRequest
 
 
 def test_computation_request_has_resolution_fields():
@@ -24,7 +24,7 @@ def test_computation_request_has_resolution_fields():
 
 
 def test_computation_request_default_resolution():
-    """Default resolution must be Ultra preset (0.5°/50m)."""
+    """Default resolution is Ultra (0.5°/50m) — hardcoded, no combo box."""
     req = ComputationRequest(
         radar_lat=51.0, radar_lon=0.0,
         site_elevation_amsl_m=100.0, antenna_amsl_m=120.0,
@@ -34,18 +34,6 @@ def test_computation_request_default_resolution():
     )
     assert req.azimuth_step_deg == 0.5
     assert req.range_step_m == 50.0
-
-
-def test_resolution_presets_keys():
-    assert set(RESOLUTION_PRESETS.keys()) == {"Fast", "Standard", "High", "Ultra"}
-
-
-def test_resolution_presets_values():
-    # Each preset: (azimuth_step_deg, range_step_m)
-    assert RESOLUTION_PRESETS["Fast"]     == (2.0,  200.0)
-    assert RESOLUTION_PRESETS["Standard"] == (1.0,  100.0)
-    assert RESOLUTION_PRESETS["High"]     == (0.5,  100.0)
-    assert RESOLUTION_PRESETS["Ultra"]    == (0.5,   50.0)
 
 
 def test_shadow_data_payload_structure():

@@ -8,7 +8,6 @@ Responsibilities:
 - Max instrumented range: spinbox (0–500km)
 - Height band selection: checkboxes for [50, 100, 500, 1000, 3000m]
 - Diffraction guard: slider (0–2°, default 0.5°)
-- Computation resolution presets: combo box (Fast/Standard/High/Ultra)
 - Compute button + "Computing..." indicator
 - Load DEM, Load Obstructions CSV, Export Coverage buttons
 - Signal: compute_requested(ComputationRequest) → main_window
@@ -33,20 +32,6 @@ HEIGHT_BANDS = {
     3000: {"color": "#cc00ff", "name": "3000m (very high)"},
 }
 
-# Resolution presets: (azimuth_step_deg, range_step_m)
-RESOLUTION_PRESETS = {
-    "Fast":     (2.0,  200.0),
-    "Standard": (1.0,  100.0),
-    "High":     (0.5,  100.0),
-    "Ultra":    (0.5,   50.0),
-}
-
-RESOLUTION_ESTIMATES = {
-    "Fast":     "~30s",
-    "Standard": "~2 min",
-    "High":     "~4 min",
-    "Ultra":    "~8 min",
-}
 
 
 @dataclass
@@ -152,12 +137,6 @@ class ControlPanel(QWidget):
 
         self.label_diffraction_value = QLabel("0.5°")
         self.label_diffraction_value.setMinimumWidth(35)
-
-        # === Computation Resolution Group ===
-        self.combo_resolution = QComboBox()
-        for name, _ in RESOLUTION_PRESETS.items():
-            self.combo_resolution.addItem(f"{name}  ({RESOLUTION_ESTIMATES[name]})", userData=name)
-        self.combo_resolution.setCurrentIndex(3)  # Ultra by default
 
         # === Height Bands (inline rows, no table) ===
         self._band_checkboxes: dict[int, QCheckBox] = {}
@@ -319,15 +298,6 @@ class ControlPanel(QWidget):
         group_radar.setLayout(gr_layout)
         layout.addWidget(group_radar)
 
-        # === Computation Resolution Group ===
-        group_resolution = QGroupBox("Computation Resolution")
-        gres_layout = QVBoxLayout()
-        res_row = QHBoxLayout()
-        res_row.addWidget(self.combo_resolution)
-        gres_layout.addLayout(res_row)
-        group_resolution.setLayout(gres_layout)
-        layout.addWidget(group_resolution)
-
         # === Display Group ===
         group_display = QGroupBox("Display")
         gdisp_layout = QVBoxLayout()
@@ -438,11 +408,6 @@ class ControlPanel(QWidget):
         mode = self.combo_shadow_mode.currentData()
         self.shadow_mode_changed.emit(mode)
 
-    def _get_resolution_params(self) -> tuple[float, float]:
-        """Return (azimuth_step_deg, range_step_m) for current preset."""
-        name = self.combo_resolution.currentData()
-        return RESOLUTION_PRESETS[name]
-
     def _on_load_dem_clicked(self):
         """Open DEM file dialog."""
         path, _ = QFileDialog.getOpenFileName(
@@ -476,7 +441,6 @@ class ControlPanel(QWidget):
 
         # Gather parameters
         site_elev = self.spin_site_elev.value()
-        az_step, rng_step = self._get_resolution_params()
         request = ComputationRequest(
             radar_lat=self.spin_lat.value(),
             radar_lon=self.spin_lon.value(),
@@ -488,8 +452,6 @@ class ControlPanel(QWidget):
             diffraction_guard_deg=self.slider_diffraction.value() * 0.1,
             dem_path=self.dem_path,
             obstructions_path=self.obstructions_path,
-            azimuth_step_deg=az_step,
-            range_step_m=rng_step,
             min_beam_deg=min_beam,
             max_beam_deg=max_beam,
         )
