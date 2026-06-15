@@ -287,6 +287,10 @@ class ControlPanel(QWidget):
         self.spin_grid_step.setValue(1000)
         self.spin_grid_step.setSuffix(" m grid")
 
+        self.label_site_estimate = QLabel("Set a bbox and grid step to estimate site count")
+        self.label_site_estimate.setStyleSheet("color: #888; font-size: 11px;")
+        self.label_site_estimate.setWordWrap(True)
+
         self.btn_find_top_k = QPushButton("Find Top-K Sites")
         self.btn_find_top_k.clicked.connect(self._on_find_top_k_clicked)
 
@@ -467,6 +471,8 @@ class ControlPanel(QWidget):
         settings_row.addWidget(self.spin_grid_step)
         gt_layout.addLayout(settings_row)
 
+        gt_layout.addWidget(self.label_site_estimate)
+
         # Action buttons
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.btn_find_top_k)
@@ -498,6 +504,7 @@ class ControlPanel(QWidget):
         for sb in (self.spin_bbox_min_lat, self.spin_bbox_max_lat,
                    self.spin_bbox_min_lon, self.spin_bbox_max_lon):
             sb.valueChanged.connect(lambda _: self._bbox_debounce_timer.start(300))
+        self.spin_grid_step.valueChanged.connect(lambda _: self._update_site_estimate())
 
     def _on_k_factor_changed(self, value):
         """Update K-factor display."""
@@ -635,6 +642,23 @@ class ControlPanel(QWidget):
             self.spin_bbox_max_lat.value(),
             self.spin_bbox_max_lon.value(),
         )
+        self._update_site_estimate()
+
+    def _update_site_estimate(self):
+        import math
+        step_m = self.spin_grid_step.value()
+        min_lat = self.spin_bbox_min_lat.value()
+        max_lat = self.spin_bbox_max_lat.value()
+        min_lon = self.spin_bbox_min_lon.value()
+        max_lon = self.spin_bbox_max_lon.value()
+        if max_lat > min_lat and max_lon > min_lon and step_m > 0:
+            lat_c = math.radians((min_lat + max_lat) / 2)
+            n_rows = max(1, int((max_lat - min_lat) / (step_m / 111_000)) + 1)
+            n_cols = max(1, int((max_lon - min_lon) / (step_m / (111_000 * math.cos(lat_c)))) + 1)
+            n = n_rows * n_cols
+            self.label_site_estimate.setText(f"~{n} candidate sites")
+        else:
+            self.label_site_estimate.setText("Set a bbox and grid step to estimate site count")
 
     def set_bbox(self, min_lat: float, min_lon: float, max_lat: float, max_lon: float):
         """Update bbox spinboxes from map draw event (called by MainWindow)."""
