@@ -14,6 +14,8 @@ Thread-safe cancel() method for graceful shutdown.
 """
 
 import dataclasses
+import numpy as np
+import rasterio
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.site_optimizer import generate_grid_points, compute_coverage_score
@@ -74,12 +76,25 @@ class OptimizationWorker(QThread):
         """
         Main optimization loop (runs in background thread).
 
-        1. Generate grid points over the bbox
-        2. Evaluate each candidate with scout resolution
-        3. Sort by coverage area (descending)
-        4. Emit top-K or error
+        1. Load DEM once (avoid N rasterio.open() calls for N candidates)
+        2. Generate grid points over the bbox
+        3. Evaluate each candidate with scout resolution
+        4. Sort by coverage area (descending)
+        5. Emit top-K or error
         """
         try:
+            # Load DEM once — avoids N rasterio.open() calls (one per candidate)
+            if not self.request_template.dem_path:
+                self.optimization_error.emit("No DEM loaded. Load a DEM before running optimization.")
+                return
+            with rasterio.open(self.request_template.dem_path) as src:
+                _dem_data = src.read(1).astype(np.float64)
+                _dem_transform = src.transform
+                _nodata = src.nodata
+            if _nodata is not None:
+                _dem_data = np.where(_dem_data == _nodata, 0.0, _dem_data)
+            _dem_data = np.where((_dem_data < -500) | (_dem_data > 9000), 0.0, _dem_data)
+
             # Generate candidate sites across the bounding box
             points = generate_grid_points(*self.bbox, self.grid_step_m)
             total = len(points)
@@ -102,7 +117,7 @@ class OptimizationWorker(QThread):
 
                 # Evaluate this candidate; skip silently on exception
                 try:
-                    score = compute_coverage_score(req)
+                    score = compute_coverage_score(req, dem_data=_dem_data, dem_transform=_dem_transform)
                     scores.append((lat, lon, score))
                 except Exception:
                     pass
