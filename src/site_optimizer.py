@@ -73,7 +73,7 @@ def generate_grid_points(
     return points
 
 
-def compute_coverage_score(request) -> float:
+def compute_coverage_score(request, *, dem_data: np.ndarray = None, dem_transform=None) -> float:
     """
     Run radial coverage computation for one site and return total coverage
     area (km²) summed across all height bands.
@@ -89,34 +89,35 @@ def compute_coverage_score(request) -> float:
     Args:
         request: ComputationRequest dataclass from src/gui/control_panel.py.
                  Duck-typed so this module does not import the GUI package.
+        dem_data: Optional pre-loaded DEM array (float64). When provided
+                  together with dem_transform, skips file I/O entirely —
+                  allows callers to open the GeoTIFF once and reuse it
+                  across 900+ candidate sites.
+        dem_transform: Optional rasterio Affine transform matching dem_data.
+                       Must be supplied together with dem_data or neither.
 
     Returns:
         Total coverage area in km² (float), summed over all height bands.
 
     Raises:
-        ValueError: if no DEM path is set on the request.
+        ValueError: if no DEM path is set on the request (fallback path only).
         rasterio.errors.RasterioIOError: if the DEM file cannot be opened.
     """
     req = request
 
-    if not req.dem_path:
-        raise ValueError(
-            "No DEM loaded. Set request.dem_path to a GeoTIFF file before scoring."
-        )
-
-    # ------------------------------------------------------------------
-    # 1. Load DEM (float64, nodata → 0, unreasonable values → 0).
-    #    Same logic as ComputationWorker.run() lines 79–87, without the
-    #    optional VOID_FILL_ENABLED branch (too slow for grid search).
-    # ------------------------------------------------------------------
-    with rasterio.open(req.dem_path) as src:
-        dem_data = src.read(1).astype(np.float64)
-        transform = src.transform
-        nodata = src.nodata
-
-    if nodata is not None:
-        dem_data = np.where(dem_data == nodata, 0.0, dem_data)
-    dem_data = np.where((dem_data < -500) | (dem_data > 9000), 0.0, dem_data)
+    if dem_data is None or dem_transform is None:
+        # Fallback: load from disk (standalone calls and tests)
+        if not req.dem_path:
+            raise ValueError(
+                "No DEM loaded. Set request.dem_path to a GeoTIFF file before scoring."
+            )
+        with rasterio.open(req.dem_path) as src:
+            dem_data = src.read(1).astype(np.float64)
+            dem_transform = src.transform
+            nodata = src.nodata
+        if nodata is not None:
+            dem_data = np.where(dem_data == nodata, 0.0, dem_data)
+        dem_data = np.where((dem_data < -500) | (dem_data > 9000), 0.0, dem_data)
 
     # ------------------------------------------------------------------
     # 2. Vectorised DEM sampler closure — identical to worker lines 109–126.
@@ -125,8 +126,8 @@ def compute_coverage_score(request) -> float:
     def sample_dem(lats, lons):
         # rasterio affine: col = (lon - x_origin) / pixel_width
         #                   row = (lat - y_origin) / pixel_height  (pixel_height < 0)
-        cols = (lons - transform.c) / transform.a
-        rows = (lats - transform.f) / transform.e
+        cols = (lons - dem_transform.c) / dem_transform.a
+        rows = (lats - dem_transform.f) / dem_transform.e
 
         in_bounds = (
             (rows >= 0) & (rows < dem_data.shape[0]) &
