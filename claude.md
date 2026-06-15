@@ -9,7 +9,7 @@
 
 **Status: Fully implemented.** All 6 backend engines wired into GUI. End-to-end: load SRTM GeoTIFF → compute terrain-masked coverage → coloured polygons on Leaflet map + polar OVD diagram.
 
-**Completed features:** Resolution presets (Fast/Standard/High/Ultra), shadow layer (Wedge + Polygon modes), beam elevation angle controls (min/max beam, donut polygon rendering).
+**Completed features:** Shadow layer (Wedge + Polygon modes), beam elevation angle controls (min/max beam, donut polygon rendering), GUI bug fixes (scroll panel, height-band rows, spinbox styling, polar OVD min-height, shadow opacity sync, error-path button reset), DEMPreprocessor.fill_voids wired behind `VOID_FILL_ENABLED` flag in worker, computation resolution hardcoded to Ultra (0.5°/50m — no combo box).
 
 ### File map
 
@@ -31,7 +31,7 @@ src/
 tests/
   test_beam_angles.py          ← 7 tests for beam gate math + dict format (all pass)
   test_tier1_validation.py     ← V1–V5 synthetic tests (pre-existing import issue)
-  test_resolution_and_shadow.py← 15 tests; 3 known failures (see Known Gaps)
+  test_resolution_and_shadow.py← 13 tests; all pass
   test_shadow_builder.py       ← 8 tests (all pass)
   test_dem_manager.py          ← 8 tests (all pass)
   conftest.py                  ← PyQt6 headless stub for CI
@@ -51,6 +51,15 @@ main.py                ← entry point: python main.py
 | 100 m AGL hard-capped at ~11.5 km | Apply diffraction guard only when `h_apparent > 0` |
 | Coverage ends at near-range shadow | Use last-visible bin: `ranges[1:][visible_idx[-1]]` |
 | Shadow zones shown as thin lines | `L.polygon()` 4-corner wedge, `fillColor:#8b0000`, `weight:0` |
+| COMPUTE button stuck after error | `_on_computation_error` now calls `set_computing_finished()` |
+| Control panel clips on short screens | `_create_layout` wraps content in `QScrollArea` (no horizontal bar) |
+| Height-bands nested scroll / cramped | Replaced `QTableWidget` with inline `QHBoxLayout` checkbox rows per band |
+| QSpinBox arrows invisible in dark theme | Added `::up-button`/`::down-button` sub-control styles + hover to `dark_stylesheet` |
+| Polar OVD title clipped when map maximised | `tight_layout(pad=0.5)`, title `pad` 20→8, `setMinimumHeight(200)`, splitter `setCollapsible(1,False)` |
+| Shadow opacity renders at 50% (slider shows 55%) | `MapView._shadow_opacity` default 0.5→0.55 |
+| Computation result clutter in status bar | Removed `label_coverage_area`, `label_void_pct`, timing signal `computation_timed` |
+| Resolution combo cluttering control panel | Removed combo + presets; hardcoded Ultra (0.5°/50m) in `ComputationRequest` defaults |
+| SRTM voids not filled in worker | `VOID_FILL_ENABLED = True` in `main_window.py` gates `fill_voids()` call after DEM load |
 
 ---
 
@@ -81,7 +90,7 @@ main.py                ← entry point: python main.py
      if h_agl == _min_h_agl:
          segs = extract_blocked_segments(terrain_visible, ranges, az)
      ```
-6. Emit `coverage_computed`, `polar_data_ready`, `shadow_data_ready`, `computation_timed`
+6. Emit `coverage_computed`, `polar_data_ready`, `shadow_data_ready`
 
 **`coverage_data` format** (emitted via `coverage_computed` signal):
 ```python
@@ -104,23 +113,13 @@ class ComputationRequest:
     diffraction_guard_deg: float
     dem_path: str = None
     obstructions_path: str = None
-    azimuth_step_deg: float = 2.0    # from resolution preset — NEVER hardcode in worker
-    range_step_m: float = 200.0      # from resolution preset — NEVER hardcode in worker
+    azimuth_step_deg: float = 0.5    # hardcoded Ultra — no combo box in GUI
+    range_step_m: float = 50.0       # hardcoded Ultra — no combo box in GUI
     min_beam_deg: float = -90.0      # beam elevation window — ±90° = no constraint
     max_beam_deg: float = 90.0
 ```
 
-### Resolution presets
-
-```python
-RESOLUTION_PRESETS = {
-    "Fast":     (2.0, 200.0),   # ~30s
-    "Standard": (1.0, 100.0),   # ~2 min
-    "High":     (0.5, 100.0),   # ~4 min
-    "Ultra":    (0.5,  50.0),   # ~8 min
-}
-```
-Preset name stored as `userData` on combo items — retrieved via `currentData()`, not index arithmetic.
+Resolution is fixed at Ultra (0.5°/50m). There is no combo box. Do not add a resolution selector back — if a different resolution is ever needed, change the dataclass defaults.
 
 ---
 
@@ -156,7 +155,7 @@ SRTM NoData = -32768. If unfilled: `h_apparent` → large negative → silent wr
 
 Pipeline (cache as `*_filled.tif`): detect voids → Tier 1 small (<10 px, `generic_filter`) → Tier 2 medium (10–100 px, `griddata linear`) → Tier 3 large (>100 px, `griddata nearest`) → `nan_to_num(0)` fallback → `gaussian_filter` boundary smoothing → verify 0 remaining voids → save float32 GeoTIFF.
 
-**Note:** Worker currently does inline nodata→0 only. Wire `TerrainEngine.load_tile()` before running on data-rich tiles (Tibet, Crete).
+**Worker void-fill:** After inline nodata→0 cleanup, worker calls `DEMPreprocessor.fill_voids()` when `VOID_FILL_ENABLED = True` (module-level flag in `main_window.py`). Set `False` to bypass (inline nodata→0 only). Progress is reported via `progress_update` signal. Exception in fill_voids is caught and logged as a warning — computation continues regardless.
 
 ---
 
@@ -168,7 +167,7 @@ Pipeline (cache as `*_filled.tif`): detect voids → Tier 1 small (<10 px, `gene
 - Profile ranges start at 0; `elevations[0] = site_elev_m`
 - Out-of-DEM → `0.0` (sea level), NOT boundary pixel clipping
 - Visibility check skips bin 0: `target_angles[1:] >= horizon_angles[1:]`
-- `azimuth_step_deg` / `range_step_m` — always read from `ComputationRequest`; NEVER hardcode
+- `azimuth_step_deg` / `range_step_m` — read from `ComputationRequest`; hardcoded to Ultra (0.5°/50m) via dataclass defaults; change defaults there, never in the worker
 
 **Beam angles:**
 - Two-gate check: `combined_mask = terrain_visible & beam_within`
@@ -185,7 +184,6 @@ Pipeline (cache as `*_filled.tif`): detect voids → Tier 1 small (<10 px, `gene
 - Shadow wedge: 4-corner `L.polygon()`, `fillColor:'#8b0000'`, `weight:0`, lowest height band only
 - Shadow mode toggle: Wedge (per-azimuth `L.polygon`) vs Polygon (`L.geoJSON` with `unary_union`)
 - `GEOD.fwd(lons, lats, azimuths, ranges)` — lons first (pyproj convention)
-- Area in status bar: `geod.geometry_area_perimeter(shapely.Polygon)` — NOT `polygon_area()`
 - GeoJSON polygon: first coord == last coord (closed ring)
 - Polar diagram: `theta_zero='N'`, `theta_direction=-1`
 
@@ -253,20 +251,13 @@ Draw highest height first, lowest last (lowest band painted on top).
 
 ### Existing gaps
 
-1. **DEM preprocessing not wired.** Worker does inline nodata→0; `DEMPreprocessor.fill_voids()` not called. Wire `TerrainEngine.load_tile()` before Crete/Tibet runs.
+1. **GeoJSON export is placeholder.** `_on_export_geojson()` uses placeholder ranges instead of `CoverageEngine.polar_to_geojson()`. Rewrite to build from `coverage_ranges_m` during computation. Also: export iterates `band_data["outer"]` now (updated for new format).
 
-2. **GeoJSON export is placeholder.** `_on_export_geojson()` uses placeholder ranges instead of `CoverageEngine.polar_to_geojson()`. Rewrite to build from `coverage_ranges_m` during computation. Also: export iterates `band_data["outer"]` now (updated for new format).
+2. **True offline not achieved.** Leaflet + map tiles load from CDN.
 
-3. **True offline not achieved.** Leaflet + map tiles load from CDN.
+3. **`dem_manager.py` not wired.** `DEMManager.open_mosaic()` reverted after multi-tile mosaics produced boxy wrong-shape coverage (nodata in mosaic treated as terrain void). Fix: fill voids per-tile before merging.
 
-4. **3 stale tests in `test_resolution_and_shadow.py`** (known failures — do not revert code to fix):
-   - `test_shadow_rendered_as_polyline_not_polygon` — expects old `L.polyline` behaviour
-   - `test_build_shadow_features_fully_blocked_returns_features` — expects 2-point centerline, not 4-corner wedge
-   - `test_build_shadow_features_significance_filter` — expects 0.85× threshold not in current code
-
-5. **`dem_manager.py` not wired.** `DEMManager.open_mosaic()` reverted after multi-tile mosaics produced boxy wrong-shape coverage (nodata in mosaic treated as terrain void). Fix: fill voids per-tile before merging.
-
-6. **`test_tier1_validation.py` pre-existing import error.** `from visibility_engine import VisibilityEngine` fails due to relative import; unrelated to current work.
+4. **`test_tier1_validation.py` pre-existing import error.** `from visibility_engine import VisibilityEngine` fails due to relative import; unrelated to current work.
 
 ---
 
