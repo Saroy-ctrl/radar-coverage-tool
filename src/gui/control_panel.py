@@ -62,8 +62,8 @@ class ComputationRequest:
     diffraction_guard_deg: float
     dem_path: str = None
     obstructions_path: str = None
-    azimuth_step_deg: float = 2.0
-    range_step_m: float = 200.0
+    azimuth_step_deg: float = 0.5
+    range_step_m: float = 50.0
     min_beam_deg: float = -90.0
     max_beam_deg: float = 90.0
 
@@ -157,7 +157,7 @@ class ControlPanel(QWidget):
         self.combo_resolution = QComboBox()
         for name, _ in RESOLUTION_PRESETS.items():
             self.combo_resolution.addItem(f"{name}  ({RESOLUTION_ESTIMATES[name]})", userData=name)
-        self.combo_resolution.setCurrentIndex(0)  # Fast by default
+        self.combo_resolution.setCurrentIndex(3)  # Ultra by default
 
         # === Height Bands (inline rows, no table) ===
         self._band_checkboxes: dict[int, QCheckBox] = {}

@@ -24,7 +24,7 @@ def test_computation_request_has_resolution_fields():
 
 
 def test_computation_request_default_resolution():
-    """Default resolution must be Fast preset (2°/200m)."""
+    """Default resolution must be Ultra preset (0.5°/50m)."""
     req = ComputationRequest(
         radar_lat=51.0, radar_lon=0.0,
         site_elevation_amsl_m=100.0, antenna_amsl_m=120.0,
@@ -32,8 +32,8 @@ def test_computation_request_default_resolution():
         height_bands_m=[50.0],
         diffraction_guard_deg=0.5,
     )
-    assert req.azimuth_step_deg == 2.0
-    assert req.range_step_m == 200.0
+    assert req.azimuth_step_deg == 0.5
+    assert req.range_step_m == 50.0
 
 
 def test_resolution_presets_keys():
