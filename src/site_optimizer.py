@@ -47,7 +47,11 @@ def generate_grid_points(
     Note:
         GEOD.fwd(lon, lat, az, dist) — lon FIRST (pyproj convention).
         Azimuth 0 = north, 90 = east.
+        Row length varies with latitude (geodesic east step contracts near poles).
     """
+    if step_m <= 0:
+        raise ValueError(f"step_m must be positive, got {step_m}")
+
     points = []
     lat = min_lat
     while lat <= max_lat + 1e-9:
@@ -56,9 +60,15 @@ def generate_grid_points(
             points.append((lat, lon))
             # Step east: advance longitude by step_m at current lat
             lon_next, _, _ = GEOD.fwd(lon, lat, 90, step_m)
+            if lon_next <= lon + 1e-10:
+                # Near poles, easting produces negligible lon change — stop row
+                break
             lon = lon_next
         # Step north: advance latitude by step_m from the western edge
         _, lat_next, _ = GEOD.fwd(min_lon, lat, 0, step_m)
+        if lat_next <= lat + 1e-10:
+            # Degenerate — no northward progress (should not happen in normal use)
+            break
         lat = lat_next
     return points
 
