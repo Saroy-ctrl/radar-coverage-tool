@@ -25,6 +25,7 @@ from src.gui.control_panel import ControlPanel, ComputationRequest
 from src.gui.map_view import MapView
 from src.gui.polar_view import PolarView
 from src.shadow_builder import extract_blocked_segments
+from src.gui.optimization_worker import OptimizationWorker
 
 
 # Dark theme colors
@@ -374,6 +375,7 @@ class MainWindow(QMainWindow):
         self.computation_worker = None
         self.computation_request = None
         self._last_coverage_data = {}
+        self._opt_worker = None
 
     def _apply_dark_theme(self):
         """Set dark theme stylesheet."""
@@ -577,6 +579,18 @@ class MainWindow(QMainWindow):
         self.control_panel.shadow_opacity_changed.connect(self.map_view.set_shadow_opacity)
         self.control_panel.shadow_mode_changed.connect(self.map_view.set_shadow_mode)
 
+        # Top-K Site Finder connections
+        self.control_panel.draw_bbox_requested.connect(self.map_view.enable_draw_mode)
+        self.control_panel.find_top_k_requested.connect(self._on_find_top_k)
+        self.control_panel.cancel_optimization.connect(self._on_cancel_optimization)
+        self.control_panel.load_site_requested.connect(self._load_top_k_site)
+        self.control_panel.bbox_changed.connect(self.map_view.show_bbox_rect)
+        # MapBridge signals: JS draws bbox or clicks marker → Python handles
+        self.map_view._bridge.bbox_received.connect(self._on_bbox_from_map)
+        self.map_view._bridge.marker_clicked.connect(
+            lambda lat, lon, rank: self._load_top_k_site(lat, lon)
+        )
+
     def _create_menu_bar(self):
         """Create menu bar with File and View menus."""
         menubar = self.menuBar()
@@ -716,6 +730,72 @@ class MainWindow(QMainWindow):
         if path:
             self.control_panel.set_obstructions_path(path)
             self.label_status.setText(f"Obstructions loaded: {Path(path).name}")
+
+    # ── Top-K Site Finder handlers ────────────────────────────────────────
+
+    def _on_bbox_from_map(self, min_lat: float, min_lon: float,
+                          max_lat: float, max_lon: float):
+        """Called when user draws a rectangle on the map via Leaflet.draw."""
+        self.control_panel.set_bbox(min_lat, min_lon, max_lat, max_lon)
+
+    def _on_find_top_k(self, min_lat: float, min_lon: float,
+                       max_lat: float, max_lon: float,
+                       k: int, grid_step_m: int):
+        """Start OptimizationWorker for the given bounding box."""
+        if self._opt_worker is not None and self._opt_worker.isRunning():
+            return  # already running; ignore duplicate request
+        self.control_panel.set_optimization_state(running=True)
+        self.map_view.clear_top_k()
+
+        req_template = self.control_panel.build_request()
+        bbox = (min_lat, min_lon, max_lat, max_lon)
+        self._opt_worker = OptimizationWorker(bbox, k, grid_step_m, req_template)
+        self._opt_worker.site_scored.connect(self._on_site_scored)
+        self._opt_worker.optimization_complete.connect(self._on_optimization_complete)
+        self._opt_worker.optimization_error.connect(self._on_optimization_error)
+        self._opt_worker.progress_update.connect(
+            lambda msg: self.label_status.setText(msg)
+        )
+        self._opt_worker.start()
+
+    def _on_site_scored(self, i_done: int, total: int):
+        """Update progress bar as each candidate site is evaluated."""
+        self.control_panel.progress_bar_optimization.setValue(
+            int(100 * i_done / total)
+        )
+        self.label_status.setText(f"Evaluating sites... {i_done}/{total}")
+
+    def _on_optimization_complete(self, top_k: list):
+        """Show top-K results on map and in sidebar."""
+        self.control_panel.set_optimization_state(running=False)
+        self.control_panel.show_optimization_results(top_k)
+        self.map_view.show_top_k_sites(top_k)
+        n = len(top_k)
+        self.label_status.setText(
+            f"Top {n} site{'s' if n != 1 else ''} found — click a marker or [Load]."
+        )
+
+    def _on_optimization_error(self, error_msg: str):
+        """Handle fatal error from OptimizationWorker."""
+        self.control_panel.set_optimization_state(running=False)
+        self.label_status.setText("Optimization error")
+        QMessageBox.critical(self, "Optimization Error", error_msg)
+
+    def _on_cancel_optimization(self):
+        """Cancel running optimization gracefully."""
+        if self._opt_worker is not None and self._opt_worker.isRunning():
+            self._opt_worker.cancel()
+            self._opt_worker.wait(3000)  # wait up to 3 s for clean exit
+        self.control_panel.set_optimization_state(running=False)
+        self.label_status.setText("Optimization cancelled.")
+
+    def _load_top_k_site(self, lat: float, lon: float):
+        """Load a top-K site into the control panel and trigger full Ultra compute."""
+        self.control_panel.set_radar_position(lat, lon)
+        self.map_view.set_antenna_location(lat, lon)
+        # Simulate clicking COMPUTE by calling _on_compute_requested with a fresh request.
+        req = self.control_panel.build_request()
+        self._on_compute_requested(req)
 
     def _on_export_geojson(self):
         """Export coverage as GeoJSON."""
