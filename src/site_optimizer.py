@@ -105,6 +105,7 @@ def compute_coverage_score(request, *, dem_data: np.ndarray = None, dem_transfor
     """
     req = request
 
+    nodata = None
     if dem_data is None or dem_transform is None:
         # Fallback: load from disk (standalone calls and tests)
         if not req.dem_path:
