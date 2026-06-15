@@ -32,6 +32,10 @@ DARK_BG = "#1e1e2e"
 DARK_PANEL = "#2a2a3e"
 ACCENT_BLUE = "#4a9eff"
 
+# Set False to bypass DEMPreprocessor tiered void-fill and use inline nodata→0 only.
+# Void fill adds ~2-5s on first load but produces better terrain in data-sparse tiles.
+VOID_FILL_ENABLED = True
+
 
 class ComputationWorker(QThread):
     """
@@ -81,6 +85,18 @@ class ComputationWorker(QThread):
             if nodata is not None:
                 dem_data = np.where(dem_data == nodata, 0.0, dem_data)
             dem_data = np.where((dem_data < -500) | (dem_data > 9000), 0.0, dem_data)
+
+            if VOID_FILL_ENABLED:
+                from src.dem_preprocessor import fill_voids
+                self.progress_update.emit("Filling DEM voids (first load may take a moment)...")
+                try:
+                    _vf_result = fill_voids(dem_data)
+                    dem_data = _vf_result["filled"]
+                    self.progress_update.emit(
+                        f"Void fill done — {_vf_result['void_fraction']*100:.1f}% of pixels filled"
+                    )
+                except Exception as _vf_err:
+                    self.progress_update.emit(f"Void fill skipped: {_vf_err}")
 
             self.progress_update.emit(
                 f"DEM loaded: {dem_data.shape[1]}×{dem_data.shape[0]} px, "
