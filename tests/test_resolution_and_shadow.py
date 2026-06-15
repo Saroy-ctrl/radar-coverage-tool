@@ -134,7 +134,7 @@ def test_build_shadow_features_full_coverage_no_shadow():
 
 
 def test_build_shadow_features_fully_blocked_returns_features():
-    """All azimuths blocked at min range → one 2-point centerline per azimuth."""
+    """All azimuths blocked at min range → one 4-corner wedge polygon per azimuth."""
     mv = _make_map_view()
     max_r = 100_000.0
     min_r = 200.0   # RANGE_STEP_M minimum
@@ -148,7 +148,7 @@ def test_build_shadow_features_fully_blocked_returns_features():
     assert len(feats) == 180
     for f in feats:
         assert "latlngs" in f
-        assert len(f["latlngs"]) == 2   # inner point + outer point
+        assert len(f["latlngs"]) == 4   # 4-corner wedge polygon
 
 
 def test_build_shadow_features_latlngs_are_floats():
@@ -173,11 +173,10 @@ def test_build_shadow_features_latlngs_are_floats():
 
 
 def test_build_shadow_features_significance_filter():
-    """Azimuths with inner_r >= 0.85 * max_range_m must be skipped."""
+    """Only azimuths that reach max_range_m exactly are skipped (no 0.85x threshold)."""
     mv = _make_map_view()
     max_r = 100_000.0
-    # First 90 azimuths barely blocked (inner_r = 90 000 = 0.9 * max_r → skip)
-    # Next 90 azimuths clearly blocked (inner_r = 50 000 = 0.5 * max_r → keep)
+    # 90 azimuths at 90 000 m, 90 at 50 000 m — both below max_r → all 180 kept
     ranges_m = [90_000.0] * 90 + [50_000.0] * 90
     feats = mv._build_shadow_features(
         ant_lat=51.5, ant_lon=0.0,
@@ -185,11 +184,11 @@ def test_build_shadow_features_significance_filter():
         azimuth_step_deg=2.0,
         max_range_m=max_r,
     )
-    assert len(feats) == 90   # only the clearly-blocked azimuths
+    assert len(feats) == 180   # current code only skips inner_r >= max_range_m
 
 
 def test_shadow_rendered_as_polyline_not_polygon():
-    """Shadow features must be rendered as L.polyline, not L.polygon."""
+    """Shadow wedge features must be rendered as L.polygon (4-corner filled wedge)."""
     mv = _make_map_view()
     mv._coverage_opacity_factor = 1.0
     mv._shadow_opacity = 0.5
@@ -197,11 +196,10 @@ def test_shadow_rendered_as_polyline_not_polygon():
     mv._shadow_mode = "Wedge"
     mv._shadow_geojson = None
 
-    shadow_feats = [{"latlngs": [[51.6, 0.1], [51.8, 0.3]]}]
+    shadow_feats = [{"latlngs": [[51.6, 0.1], [51.7, 0.2], [51.7, 0.3], [51.6, 0.3]]}]
     html = mv._generate_leaflet_html(51.5, 0.0, [], shadow_feats)
 
-    assert "L.polyline" in html
-    assert "L.polygon" not in html
+    assert "L.polygon" in html
 
 
 def test_range_ring_interval_selection():
