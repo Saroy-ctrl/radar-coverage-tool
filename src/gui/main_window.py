@@ -46,7 +46,6 @@ class ComputationWorker(QThread):
     error_occurred = pyqtSignal(str)  # Error message
     computation_finished = pyqtSignal()
     shadow_data_ready = pyqtSignal(dict)    # blocking range per azimuth for lowest height band
-    computation_timed = pyqtSignal(float)   # elapsed wall-clock seconds for this run
 
     def __init__(self, request: ComputationRequest):
         super().__init__()
@@ -168,7 +167,6 @@ class ComputationWorker(QThread):
             horizon_angles_deg = np.zeros(n_az, dtype=np.float64)
 
             self.progress_update.emit("Computing coverage (this may take a minute)...")
-            _t_start = _time.monotonic()
 
             for i, az in enumerate(azimuths):
                 # Forward geodetic: all range bins at once
@@ -261,10 +259,7 @@ class ComputationWorker(QThread):
                     pct = int(i / n_az * 100)
                     self.progress_update.emit(f"Computing... {pct}%")
 
-            _elapsed = _time.monotonic() - _t_start
-
             self.progress_update.emit("Building coverage polygons...")
-            self.computation_timed.emit(_elapsed)
 
             # Shadow data for MapView: both modes use the same payload.
             # "ranges_m" drives the fast wedge mode.
@@ -655,7 +650,6 @@ class MainWindow(QMainWindow):
         self.computation_worker.error_occurred.connect(self._on_computation_error)
         self.computation_worker.computation_finished.connect(self._on_computation_finished)
         self.computation_worker.shadow_data_ready.connect(self._on_shadow_data_ready)
-        self.computation_worker.computation_timed.connect(self._on_computation_timed)
         self.computation_worker.start()
 
     def _on_progress_update(self, message: str):
@@ -701,10 +695,6 @@ class MainWindow(QMainWindow):
         if req is None:
             return
         self.map_view.set_shadow_data(req.radar_lat, req.radar_lon, payload)
-
-    def _on_computation_timed(self, elapsed_seconds: float):
-        """Recalibrate control panel estimate label with measured time."""
-        self.control_panel.recalibrate_estimate(elapsed_seconds)
 
     def _on_computation_error(self, error_msg: str):
         """Handle computation error."""
