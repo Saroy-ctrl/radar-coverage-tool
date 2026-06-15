@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QSlider, QPushButton, QCheckBox, QFileDialog,
     QProgressBar, QComboBox, QLineEdit, QScrollArea
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 
 
@@ -159,12 +159,6 @@ class ControlPanel(QWidget):
             self.combo_resolution.addItem(f"{name}  ({RESOLUTION_ESTIMATES[name]})", userData=name)
         self.combo_resolution.setCurrentIndex(0)  # Fast by default
 
-        self.label_resolution_estimate = QLabel(f"Est. {RESOLUTION_ESTIMATES['Fast']}")
-        self.label_resolution_estimate.setStyleSheet("color: #aaa; font-size: 11px;")
-
-        # Per-preset measured elapsed time (recalibrated after each run)
-        self._measured_elapsed = {}
-
         # === Height Bands (inline rows, no table) ===
         self._band_checkboxes: dict[int, QCheckBox] = {}
         self._height_bands_layout = QVBoxLayout()
@@ -212,10 +206,6 @@ class ControlPanel(QWidget):
         self.btn_compute.setMinimumHeight(40)
         self.btn_compute.setStyleSheet("font-size: 14px; font-weight: bold;")
         self.btn_compute.clicked.connect(self._on_compute_clicked)
-
-        # Progress indicator
-        self.label_computing = QLabel("Ready")
-        self.label_computing.setStyleSheet("color: #4a9eff; font-weight: bold;")
 
         # === Export Buttons ===
         self.btn_export_geojson = QPushButton("Export GeoJSON")
@@ -334,7 +324,6 @@ class ControlPanel(QWidget):
         gres_layout = QVBoxLayout()
         res_row = QHBoxLayout()
         res_row.addWidget(self.combo_resolution)
-        res_row.addWidget(self.label_resolution_estimate)
         gres_layout.addLayout(res_row)
         group_resolution.setLayout(gres_layout)
         layout.addWidget(group_resolution)
@@ -408,7 +397,6 @@ class ControlPanel(QWidget):
 
         # === Compute and Status ===
         layout.addWidget(self.btn_compute)
-        layout.addWidget(self.label_computing)
 
         # === Export Buttons ===
         layout.addWidget(self.btn_export_geojson)
@@ -423,7 +411,6 @@ class ControlPanel(QWidget):
         """Connect internal signals (K-factor and diffraction sliders)."""
         self.slider_k_factor.valueChanged.connect(self._on_k_factor_changed)
         self.slider_diffraction.valueChanged.connect(self._on_diffraction_changed)
-        self.combo_resolution.currentIndexChanged.connect(self._on_resolution_changed)
         self.slider_coverage_opacity.valueChanged.connect(self._on_coverage_opacity_changed)
         self.slider_shadow_opacity.valueChanged.connect(self._on_shadow_opacity_changed)
 
@@ -436,19 +423,6 @@ class ControlPanel(QWidget):
         """Update diffraction guard display."""
         angle = value * 0.1
         self.label_diffraction_value.setText(f"{angle:.1f}°")
-
-    def _on_resolution_changed(self, index: int):
-        """Update estimate label when resolution preset changes."""
-        name = self.combo_resolution.itemData(index)
-        if name in self._measured_elapsed:
-            secs = self._measured_elapsed[name]
-            if secs < 60:
-                label = f"~{secs:.0f}s"
-            else:
-                label = f"~{secs/60:.1f} min"
-        else:
-            label = RESOLUTION_ESTIMATES[name]
-        self.label_resolution_estimate.setText(f"Est. {label}")
 
     def _on_coverage_opacity_changed(self, value: int):
         """Emit coverage opacity as 0.0–1.0 fraction."""
@@ -463,13 +437,6 @@ class ControlPanel(QWidget):
     def _on_shadow_mode_changed(self, _index: int):
         mode = self.combo_shadow_mode.currentData()
         self.shadow_mode_changed.emit(mode)
-
-    def recalibrate_estimate(self, elapsed_seconds: float):
-        """Store measured elapsed time for the preset just used."""
-        name = self.combo_resolution.currentData()
-        index = self.combo_resolution.currentIndex()
-        self._measured_elapsed[name] = elapsed_seconds
-        self._on_resolution_changed(index)
 
     def _get_resolution_params(self) -> tuple[float, float]:
         """Return (azimuth_step_deg, range_step_m) for current preset."""
@@ -530,7 +497,6 @@ class ControlPanel(QWidget):
         # Update UI state
         self.is_computing = True
         self.btn_compute.setEnabled(False)
-        self.label_computing.setText("Computing...")
 
         # Emit signal
         self.compute_requested.emit(request)
@@ -542,8 +508,7 @@ class ControlPanel(QWidget):
     def _on_export_png_clicked(self):
         """Emit export PNG signal."""
         # For now, just acknowledge
-        self.label_computing.setText("PNG export not yet implemented")
-        QTimer.singleShot(2000, lambda: self.label_computing.setText("Ready"))
+        pass
 
     def set_dem_path(self, path: str):
         """Set DEM path and update UI."""
@@ -563,6 +528,5 @@ class ControlPanel(QWidget):
         """Called by main window when computation finishes."""
         self.is_computing = False
         self.btn_compute.setEnabled(True)
-        self.label_computing.setText("Ready")
 
 
