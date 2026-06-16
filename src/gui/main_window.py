@@ -11,6 +11,7 @@ Responsibilities:
 - Never blocks main thread during computation
 """
 
+import dataclasses
 import sys
 from pathlib import Path
 
@@ -549,7 +550,9 @@ class MainWindow(QMainWindow):
 
         # Left: Control panel
         main_splitter.addWidget(self.control_panel)
-        self.control_panel.setMaximumWidth(350)
+        self.control_panel.setMinimumWidth(255)
+        self.control_panel.setMaximumWidth(400)
+        main_splitter.setSizes([270, 1200])
 
         # Right: Vertical splitter for map and polar
         right_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -740,7 +743,8 @@ class MainWindow(QMainWindow):
 
     def _on_find_top_k(self, min_lat: float, min_lon: float,
                        max_lat: float, max_lon: float,
-                       k: int, grid_step_m: int):
+                       k: int, grid_step_m: int,
+                       score_min_h: float, score_max_h: float):
         """Start OptimizationWorker for the given bounding box."""
         if self._opt_worker is not None and self._opt_worker.isRunning():
             return  # already running; ignore duplicate request
@@ -748,6 +752,15 @@ class MainWindow(QMainWindow):
         self.map_view.clear_top_k()
 
         req_template = self.control_panel.build_request()
+
+        # Override height bands to the user-specified target height range so
+        # the optimizer scores sites for exactly the target heights, not all
+        # display bands. Use min and max (deduplicated) so flat ranges reduce
+        # to a single height computation.
+        score_heights = sorted(set([score_min_h, score_max_h])) if score_min_h != score_max_h \
+            else [score_min_h]
+        req_template = dataclasses.replace(req_template, height_bands_m=score_heights)
+
         bbox = (min_lat, min_lon, max_lat, max_lon)
         self._opt_worker = OptimizationWorker(bbox, k, grid_step_m, req_template)
         self._opt_worker.site_scored.connect(self._on_site_scored)

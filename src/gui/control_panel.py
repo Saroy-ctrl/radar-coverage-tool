@@ -67,8 +67,8 @@ class ControlPanel(QWidget):
     shadow_mode_changed = pyqtSignal(str)
 
     # Top-K Site Finder signals
-    find_top_k_requested = pyqtSignal(float, float, float, float, int, int)
-    #                                  min_lat min_lon max_lat max_lon k step_m
+    find_top_k_requested = pyqtSignal(float, float, float, float, int, int, float, float)
+    #                                  min_lat min_lon max_lat max_lon k step_m score_min_h score_max_h
     # PyQt6 signals cannot carry tuple — bbox passed as 4 individual floats.
     draw_bbox_requested   = pyqtSignal()
     cancel_optimization   = pyqtSignal()
@@ -288,6 +288,18 @@ class ControlPanel(QWidget):
         self.spin_grid_step.setValue(1000)
         self.spin_grid_step.setSuffix(" m grid")
 
+        self.spin_score_min_height = QSpinBox()
+        self.spin_score_min_height.setRange(0, 10000)
+        self.spin_score_min_height.setSingleStep(50)
+        self.spin_score_min_height.setValue(100)
+        self.spin_score_min_height.setSuffix(" m")
+
+        self.spin_score_max_height = QSpinBox()
+        self.spin_score_max_height.setRange(0, 10000)
+        self.spin_score_max_height.setSingleStep(50)
+        self.spin_score_max_height.setValue(500)
+        self.spin_score_max_height.setSuffix(" m")
+
         self.label_site_estimate = QLabel("Set a bbox and grid step to estimate site count")
         self.label_site_estimate.setStyleSheet("color: #888; font-size: 11px;")
         self.label_site_estimate.setWordWrap(True)
@@ -420,20 +432,16 @@ class ControlPanel(QWidget):
         # === DEM Source Group ===
         group_dem = QGroupBox("DEM File")
         gd_layout = QVBoxLayout()
-        dem_row = QHBoxLayout()
-        dem_row.addWidget(self.line_dem)
-        dem_row.addWidget(self.btn_load_dem)
-        gd_layout.addLayout(dem_row)
+        gd_layout.addWidget(self.line_dem)
+        gd_layout.addWidget(self.btn_load_dem)
         group_dem.setLayout(gd_layout)
         layout.addWidget(group_dem)
 
         # === Obstructions CSV Group ===
         group_obs = QGroupBox("Obstructions")
         go_layout = QVBoxLayout()
-        obs_row = QHBoxLayout()
-        obs_row.addWidget(self.line_obstructions)
-        obs_row.addWidget(self.btn_load_obstructions)
-        go_layout.addLayout(obs_row)
+        go_layout.addWidget(self.line_obstructions)
+        go_layout.addWidget(self.btn_load_obstructions)
         group_obs.setLayout(go_layout)
         layout.addWidget(group_obs)
 
@@ -471,6 +479,15 @@ class ControlPanel(QWidget):
         settings_row.addWidget(self.spin_top_k)
         settings_row.addWidget(self.spin_grid_step)
         gt_layout.addLayout(settings_row)
+
+        # Target height range for scoring
+        gt_layout.addWidget(QLabel("Target height range (AGL):"))
+        height_row = QHBoxLayout()
+        height_row.addWidget(QLabel("Min:"))
+        height_row.addWidget(self.spin_score_min_height)
+        height_row.addWidget(QLabel("Max:"))
+        height_row.addWidget(self.spin_score_max_height)
+        gt_layout.addLayout(height_row)
 
         gt_layout.addWidget(self.label_site_estimate)
 
@@ -630,10 +647,15 @@ class ControlPanel(QWidget):
         max_lon = self.spin_bbox_max_lon.value()
         if min_lat >= max_lat or min_lon >= max_lon:
             return  # silently ignore degenerate bbox
+        score_min_h = float(min(self.spin_score_min_height.value(),
+                                self.spin_score_max_height.value()))
+        score_max_h = float(max(self.spin_score_min_height.value(),
+                                self.spin_score_max_height.value()))
         self.find_top_k_requested.emit(
             min_lat, min_lon, max_lat, max_lon,
             self.spin_top_k.value(),
             self.spin_grid_step.value(),
+            score_min_h, score_max_h,
         )
 
     def _emit_bbox_changed(self):
