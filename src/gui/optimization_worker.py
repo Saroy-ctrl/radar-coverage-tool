@@ -100,24 +100,46 @@ class OptimizationWorker(QThread):
             total = len(points)
             self.progress_update.emit(f"Evaluating {total} candidate sites...")
 
+            # Mast + antenna height above ground level, preserved across all candidates
+            _mast_agl = (self.request_template.antenna_amsl_m
+                         - self.request_template.site_elevation_amsl_m)
+
             scores = []
             for i, (lat, lon) in enumerate(points):
                 # Check cancellation flag
                 if self._cancelled:
                     return
 
-                # Create a request for this candidate with scout resolution
+                # Look up actual terrain elevation at this candidate from the
+                # pre-loaded DEM (nearest-pixel).  Without this, every candidate
+                # uses the fixed elevation from the control panel, making highland
+                # sites appear as low as a coastal site and biasing the result.
+                col = (lon - _dem_transform.c) / _dem_transform.a
+                row = (lat - _dem_transform.f) / _dem_transform.e
+                in_bounds = (0 <= row < _dem_data.shape[0]
+                             and 0 <= col < _dem_data.shape[1])
+                if in_bounds:
+                    candidate_elev = float(_dem_data[int(round(row)), int(round(col))])
+                    candidate_elev = max(candidate_elev, 0.0)  # clamp to sea level
+                else:
+                    candidate_elev = self.request_template.site_elevation_amsl_m
+
+                # Create a request for this candidate with scout resolution and
+                # the candidate's actual terrain elevation
                 req = dataclasses.replace(
                     self.request_template,
                     radar_lat=lat,
                     radar_lon=lon,
+                    site_elevation_amsl_m=candidate_elev,
+                    antenna_amsl_m=candidate_elev + _mast_agl,
                     azimuth_step_deg=SCOUT_AZIMUTH_STEP,
                     range_step_m=SCOUT_RANGE_STEP,
                 )
 
                 # Evaluate this candidate; skip silently on exception
                 try:
-                    score = compute_coverage_score(req, dem_data=_dem_data, dem_transform=_dem_transform)
+                    score = compute_coverage_score(req, dem_data=_dem_data, dem_transform=_dem_transform,
+                                                   bbox=self.bbox)
                     scores.append((lat, lon, score))
                 except Exception:
                     pass
