@@ -140,7 +140,7 @@ class OptimizationWorker(QThread):
                 try:
                     score = compute_coverage_score(req, dem_data=_dem_data, dem_transform=_dem_transform,
                                                    bbox=self.bbox)
-                    scores.append((lat, lon, score))
+                    scores.append((lat, lon, score, candidate_elev))
                 except Exception:
                     pass
 

@@ -802,11 +802,14 @@ class MainWindow(QMainWindow):
         self.control_panel.set_optimization_state(running=False)
         self.label_status.setText("Optimization cancelled.")
 
-    def _load_top_k_site(self, lat: float, lon: float):
-        """Load a top-K site into the control panel and trigger full Ultra compute."""
-        self.control_panel.set_radar_position(lat, lon)
+    def _load_top_k_site(self, lat: float, lon: float, elev_amsl_m: float):
+        """Load a top-K site into the control panel and trigger full Ultra compute.
+
+        elev_amsl_m is the DEM-sampled terrain elevation at the candidate site,
+        set on the control panel so the display computation uses the correct height.
+        """
+        self.control_panel.set_radar_position(lat, lon, elev_amsl_m)
         self.map_view.set_antenna_location(lat, lon)
-        # Simulate clicking COMPUTE by calling _on_compute_requested with a fresh request.
         req = self.control_panel.build_request()
         self._on_compute_requested(req)
 

@@ -93,7 +93,7 @@ class MapView(QWidget):
             self._channel = None
 
         # Top-K and bbox state — persisted here so _render_map() always includes them
-        self._top_k_sites: list = []  # [(lat, lon, score_km2), ...] or []
+        self._top_k_sites: list = []  # [(lat, lon, score_km2, elev_amsl_m), ...] or []
         self._bbox: tuple | None = None  # (min_lat, min_lon, max_lat, max_lon) or None
 
         # Allow the local file:// page to load Leaflet + tile CDN URLs.
@@ -350,7 +350,7 @@ L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
             return ""
         colors = ["'#ffd700'", "'#c0c0c0'", "'#cd7f32'"]
         blocks = []
-        for rank, (lat, lon, score) in enumerate(self._top_k_sites, start=1):
+        for rank, (lat, lon, score, *_) in enumerate(self._top_k_sites, start=1):
             color = colors[rank - 1] if rank <= 3 else "'#4fc3f7'"
             tooltip = f"#{rank} &mdash; {score:.0f} km&sup2;"
             blocks.append(

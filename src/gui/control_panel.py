@@ -72,7 +72,7 @@ class ControlPanel(QWidget):
     # PyQt6 signals cannot carry tuple — bbox passed as 4 individual floats.
     draw_bbox_requested   = pyqtSignal()
     cancel_optimization   = pyqtSignal()
-    load_site_requested   = pyqtSignal(float, float)   # (lat, lon)
+    load_site_requested   = pyqtSignal(float, float, float)   # (lat, lon, elev_amsl_m)
     bbox_changed          = pyqtSignal(float, float, float, float)  # min_lat,min_lon,max_lat,max_lon
 
     def __init__(self):
@@ -708,7 +708,7 @@ class ControlPanel(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        for rank, (lat, lon, score) in enumerate(top_k, start=1):
+        for rank, (lat, lon, score, elev) in enumerate(top_k, start=1):
             row = QHBoxLayout()
             row.setSpacing(6)
             rank_label = QLabel(f"#{rank}")
@@ -718,8 +718,9 @@ class ControlPanel(QWidget):
             score_label.setMinimumWidth(64)
             load_btn = QPushButton("Load")
             load_btn.setMaximumWidth(50)
-            _lat, _lon = lat, lon   # capture for lambda
-            load_btn.clicked.connect(lambda checked, la=_lat, lo=_lon: self.load_site_requested.emit(la, lo))
+            load_btn.clicked.connect(
+                lambda checked, la=lat, lo=lon, el=elev: self.load_site_requested.emit(la, lo, el)
+            )
             row.addWidget(rank_label)
             row.addWidget(coord_label)
             row.addWidget(score_label)
@@ -728,10 +729,12 @@ class ControlPanel(QWidget):
             row_widget.setLayout(row)
             self._results_layout.addWidget(row_widget)
 
-    def set_radar_position(self, lat: float, lon: float):
-        """Update the radar lat/lon spinboxes (called when loading a top-K site)."""
+    def set_radar_position(self, lat: float, lon: float, elev_amsl_m: float = None):
+        """Update radar lat/lon and optionally site elevation spinboxes."""
         self.spin_lat.setValue(lat)
         self.spin_lon.setValue(lon)
+        if elev_amsl_m is not None:
+            self.spin_site_elev.setValue(round(elev_amsl_m))
 
     def build_request(self):
         """
