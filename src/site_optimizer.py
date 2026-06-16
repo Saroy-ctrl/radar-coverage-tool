@@ -73,10 +73,73 @@ def generate_grid_points(
     return points
 
 
-def compute_coverage_score(request, *, dem_data: np.ndarray = None, dem_transform=None) -> float:
+def _ray_bbox_distances(
+    ant_lat_deg: float,
+    ant_lon_deg: float,
+    azimuths_deg: np.ndarray,
+    bbox: tuple,
+) -> np.ndarray:
     """
-    Run radial coverage computation for one site and return total coverage
-    area (km²) summed across all height bands.
+    Flat-earth distance (metres) from a point inside bbox to the bbox boundary
+    along each azimuth.
+
+    Uses a local Cartesian frame with the bbox SW corner as origin, axes in
+    metres (north = +y, east = +x). Accuracy ~0.3% for bbox sizes up to 300 km,
+    which is sufficient for a ranking metric.
+
+    Args:
+        ant_lat_deg: candidate latitude (degrees)
+        ant_lon_deg: candidate longitude (degrees)
+        azimuths_deg: azimuths in degrees (clockwise from north)
+        bbox: (min_lat, min_lon, max_lat, max_lon)
+
+    Returns:
+        Array of distances in metres, one per azimuth. Always > 0 for a
+        point strictly inside the bbox.
+    """
+    min_lat, min_lon, max_lat, max_lon = bbox
+    lat_rad = np.radians(ant_lat_deg)
+
+    m_per_deg_lat = 111320.0
+    m_per_deg_lon = 111320.0 * np.cos(lat_rad)
+
+    y = (ant_lat_deg - min_lat) * m_per_deg_lat   # metres north of south edge
+    x = (ant_lon_deg - min_lon) * m_per_deg_lon   # metres east of west edge
+
+    H = (max_lat - min_lat) * m_per_deg_lat        # total bbox height (m)
+    W = (max_lon - min_lon) * m_per_deg_lon        # total bbox width (m)
+
+    az_rad = np.radians(np.asarray(azimuths_deg, dtype=np.float64))
+    dy = np.cos(az_rad)   # north component of unit direction
+    dx = np.sin(az_rad)   # east component of unit direction
+
+    INF = np.full_like(az_rad, np.inf)
+
+    # Parametric t to hit each edge; t has units of metres (unit direction vector).
+    # errstate suppresses divide-by-zero: np.where evaluates both branches before
+    # selecting, so masked zero-dy/dx values still produce a division attempt.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        t_N = np.where(dy >  1e-12, (H - y) / dy, INF)
+        t_S = np.where(dy < -1e-12,      -y / dy, INF)
+        t_E = np.where(dx >  1e-12, (W - x) / dx, INF)
+        t_W = np.where(dx < -1e-12,      -x / dx, INF)
+
+    return np.minimum(np.minimum(t_N, t_S), np.minimum(t_E, t_W))
+
+
+def compute_coverage_score(request, *, dem_data: np.ndarray = None, dem_transform=None,
+                           bbox: tuple = None) -> float:
+    """
+    Run radial coverage computation for one site and return total capped-radial
+    coverage area (km²) summed across all height bands.
+
+    When bbox=(min_lat, min_lon, max_lat, max_lon) is provided each azimuth's
+    coverage range is capped at the distance to the bbox boundary in that
+    direction before the scoring polygon is built.  This means sites that
+    overshoot the bbox edge in one direction receive no extra credit — the
+    metric rewards sites whose coverage reaches ALL bbox edges, not just sites
+    with one very long unidirectional arm (which the raw polygon-area metric
+    favours due to its quadratic dependence on range).
 
     Replicates the EXACT same radial math as ComputationWorker.run() in
     src/gui/main_window.py (lines 59–346), minus Qt signals, shadow
@@ -260,31 +323,58 @@ def compute_coverage_score(request, *, dem_data: np.ndarray = None, dem_transfor
             coverage_ranges_m[h_agl][i] = min(max_r, max_range_m)
 
     # ------------------------------------------------------------------
-    # 7. Build outer polygon ring and compute area for each height band.
-    #    Mirrors worker lines 308–341 and area calculation described in
-    #    the task specification.
+    # 7. Build scoring polygon and compute area for each height band.
+    #
+    #    When bbox is provided, each azimuth's range is capped at the distance
+    #    to the bbox edge in that direction (via _ray_bbox_distances).  The
+    #    polygon is then built from these capped ranges so coverage that
+    #    extends beyond the bbox boundary contributes nothing to the score.
+    #
+    #    Effect on site ranking: the old area metric was quadratic in range
+    #    (area ∝ r²), so a site with one 100 km arm scored 100× a site with
+    #    one 10 km arm.  After capping, once a direction's coverage reaches
+    #    the bbox edge, the contribution in that direction is bounded — the
+    #    metric now rewards sites that reach the bbox boundary in ALL
+    #    directions rather than sites with a single long open arm.
     # ------------------------------------------------------------------
+    if bbox is not None:
+        d_bbox = _ray_bbox_distances(ant_lat, ant_lon, azimuths, bbox)
+    else:
+        d_bbox = None
+
     total_area_km2 = 0.0
 
     for h in heights_agl:
-        ranges_h = coverage_ranges_m[h]
-        # Clamp degenerate near-zero radii to one range step so the polygon
-        # doesn't collapse to a point (same guard as worker line 312)
+        ranges_h = coverage_ranges_m[h].copy()
+
+        # Clamp degenerate near-zero radii (same guard as before)
         ranges_h = np.where(ranges_h < RANGE_STEP_M, RANGE_STEP_M, ranges_h)
+
+        if d_bbox is not None:
+            # Cap each azimuth at the distance to the bbox edge
+            ranges_h = np.minimum(ranges_h, d_bbox)
+            # Re-apply degenerate guard: d_bbox can be < RANGE_STEP_M for a
+            # site very close to a bbox edge (corner azimuths approach zero)
+            ranges_h = np.where(ranges_h < RANGE_STEP_M, RANGE_STEP_M, ranges_h)
 
         # Vectorised geodetic forward: all azimuths at once (lon first)
         lons_p, lats_p, _ = GEOD.fwd(
             np.full(n_az, ant_lon),
             np.full(n_az, ant_lat),
             azimuths,
-            ranges_h
+            ranges_h,
         )
         # Close the ring: first coord == last coord (GeoJSON polygon convention)
         lat_list = lats_p.tolist() + [lats_p[0]]
         lon_list = lons_p.tolist() + [lons_p[0]]
-        coords = list(zip(lon_list, lat_list))  # shapely uses (lon, lat)
+        coords = list(zip(lon_list, lat_list))
 
         poly = shapely.geometry.Polygon(coords)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty:
+            continue
+
         # geometry_area_perimeter returns signed area; abs() handles winding order
         area_m2, _ = GEOD.geometry_area_perimeter(poly)
         total_area_km2 += abs(area_m2) / 1e6
