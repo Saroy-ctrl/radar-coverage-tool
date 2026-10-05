@@ -33,3 +33,15 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Local tooling state
+.codegraph/
+.pytest_cache/
+.claude/settings.local.json
+
+# Not published
+CLAUDE.md
+claude.md
+tests/
+docs/
+.claude/
