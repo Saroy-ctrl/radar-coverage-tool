@@ -18,6 +18,12 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
+
+class _RadarToolbar(NavigationToolbar2QT):
+    """Minimal toolbar: only Home (reset view) and Save (multi-format export)."""
+    toolitems = [t for t in NavigationToolbar2QT.toolitems
+                 if t[0] in ('Home', 'Save')]
+
 # Height band colors (Cambridge Pixel convention)
 HEIGHT_BAND_COLORS = {
     50: "#00cc44",
@@ -32,6 +38,10 @@ DARK_BG = "#1e1e2e"
 DARK_PANEL = "#2a2a3e"
 ACCENT_TEXT = "#e8e8e8"
 
+# Legend x-position in axes fractions (1.0 = right edge of the polar circle);
+# the gap clears the 90° tick label
+LEGEND_X_OFFSET_AXES = 1.15
+
 
 class PolarView(QWidget):
     """Matplotlib polar diagram embedded in PyQt6."""
@@ -45,6 +55,7 @@ class PolarView(QWidget):
         self.current_height = 500  # Default selected height
         self.coverage_data = {}
         self.horizon_data = None
+        self._band_colors: dict = dict(HEIGHT_BAND_COLORS)  # mutable copy
 
         self._create_widgets()
         self._create_initial_plot()
@@ -59,7 +70,7 @@ class PolarView(QWidget):
         self.canvas = FigureCanvas(self.fig)
 
         # Create toolbar
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar = _RadarToolbar(self.canvas, self)
         self._style_toolbar()
 
         # Create layout
@@ -121,6 +132,10 @@ class PolarView(QWidget):
         self.fig.tight_layout(pad=0.5)
         self.canvas.draw()
 
+    def set_height_band_config(self, bands: list):
+        """Update band colour table from control panel config."""
+        self._band_colors = {b["height_m"]: b["color"] for b in bands}
+
     def update_data(self, polar_data: dict):
         """
         Update polar diagram with new data.
@@ -163,7 +178,7 @@ class PolarView(QWidget):
         heights_sorted = sorted(self.coverage_data.keys(), reverse=True)
         for height_m in heights_sorted:
             ranges_km = self.coverage_data[height_m]
-            color = HEIGHT_BAND_COLORS.get(height_m, "#4a9eff")
+            color = self._band_colors.get(height_m) or self._band_colors.get(int(height_m), "#4a9eff")
 
             # Plot as filled area
             self.ax.fill_between(
@@ -190,9 +205,10 @@ class PolarView(QWidget):
         self.ax.set_ylabel("Range (km)", color=ACCENT_TEXT, labelpad=40, fontsize=10)
         self.ax.set_title("Coverage Diagram (OVD)", color=ACCENT_TEXT, pad=8, fontsize=11, fontweight='bold')
 
-        # Legend with dark background
+        # Legend with dark background — anchored by its upper-LEFT corner just
+        # right of the circle so it never overlaps the plot
         legend = self.ax.legend(
-            loc='upper right', bbox_to_anchor=(1.25, 1.1),
+            loc='upper left', bbox_to_anchor=(LEGEND_X_OFFSET_AXES, 1.0),
             framealpha=0.9, fancybox=True, shadow=False,
             fontsize=9
         )

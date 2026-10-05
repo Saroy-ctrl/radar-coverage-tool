@@ -120,7 +120,7 @@ Work down the left-hand panel from top to bottom:
 
 1. **DEM File:** click **Browse DEM...** and choose your `.tif` terrain file.
 2. **Antenna Location:** type the radar's **Latitude** and **Longitude** in decimal degrees. North and East are positive; South and West are negative. Example: `51.13`, `1.32`.
-3. **Site Elevation AMSL (m):** the ground height at the radar, in metres above sea level.
+3. **Site Elevation AMSL (m):** the ground height at the radar, in metres above sea level. This is **filled in automatically** from the terrain file once you set the location. Change it only if you know better, for example for a radar on a rooftop.
 4. **Mast Height / Antenna Height (m):** how high the antenna sits above the ground.
 5. **Max Instrumented Range (km):** how far the radar can see at most.
 6. **Target Flight Heights:** the aircraft heights to check, in metres above the ground. Five are set by default. You can:
@@ -163,7 +163,7 @@ The **Top-K Site Finder** tests many possible radar positions inside an area and
    - **m grid:** the grid step, i.e. the spacing between test positions. Smaller means more sites, which is slower but more thorough,
    - **Target height range:** the aircraft heights to plan for.
    The panel shows roughly how many sites will be tested.
-4. Click **Find Top-K Sites**. A progress count appears, and you can stop at any time with **Cancel Search**.
+4. Click **Find Top-K Sites**. It first does a quick scan of every candidate, then re-checks the best ones in full detail. A progress count appears, and you can stop at any time with **Cancel Search**.
 5. Results are listed as `X km² @ N m AGL`: the area covered at the lowest target height. Click **ℹ** for a full explanation.
 6. Click **Load** next to any result. This moves the radar there (with its correct ground height) and computes its full coverage straight away.
 
@@ -189,12 +189,23 @@ lat,lon,height_amsl_m,type,description
 |---------|-----|
 | `python` is not recognised | Python isn't on your PATH. Reinstall and tick **"Add python.exe to PATH"**, or use Anaconda Prompt |
 | `ModuleNotFoundError: No module named ...` | Step 3 wasn't completed in this terminal. With Anaconda, run `conda activate radar` first |
-| `DLL load failed while importing QtWidgets` (Windows) | PyQt6 install is broken or mismatched. Run `pip install --force-reinstall PyQt6 PyQt6-WebEngine` inside the same environment |
+| `conda activate radar` in PowerShell prints `invalid choice: ''` | Older conda versions don't work with PowerShell 7.5+. Use **Anaconda Prompt** instead, or update conda: `& "<anaconda folder>\Scripts\conda.exe" update -n base conda -y` |
+| `DLL load failed while importing QtWidgets` (Windows) | Usually the environment isn't activated, so Windows picks up DLLs from another Python. Run `conda activate radar` first. If it still fails, run `pip install --force-reinstall PyQt6 PyQt6-WebEngine` inside the environment |
 | Map area is blank or grey | No internet connection. The background map loads online |
 | **Draw Rectangle on Map** does nothing | Some PyQt6 installs lack the map-to-app link. Type the search-area corners into the boxes instead |
 | Coverage looks like a perfect circle | The terrain file doesn't cover your radar location. Check the lat/lon, and that you downloaded the right tile |
+| Coverage is tiny or mostly shadow even over flat ground | Check **Site Elevation**. If it is lower than the real ground, the antenna sits "inside" the hill next to it. Re-enter the latitude/longitude to refill it from the terrain file |
 | Coverage looks far too big over land | The terrain file is too small for your Max Range. Use a bigger area or a lower range |
 | Top-K search is slow | Increase the **m grid** step or make the search area smaller |
+
+---
+
+## Known limitations
+
+- **Export GeoJSON** is not finished. The saved shapes don't yet match the map.
+- **Top-K can suggest sites in the sea** if your search area includes water. Keep the search box over land, or ignore results with a site elevation of 0 m.
+- The **"Horizon" line** on the polar chart is drawn on the range axis, so its size is not meaningful. Use the coloured coverage lines instead.
+- The background map needs an internet connection.
 
 ---
 

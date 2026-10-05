@@ -19,7 +19,13 @@ from pathlib import Path
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineSettings
-from PyQt6.QtCore import QUrl
+from PyQt6.QtCore import QUrl, QObject, pyqtSlot, pyqtSignal
+try:
+    from PyQt6.QtWebChannel import QWebChannel as _QWebChannel
+    _HAS_WEBCHANNEL = True
+except Exception:
+    _QWebChannel = None
+    _HAS_WEBCHANNEL = False
 
 # Height band colors (Cambridge Pixel convention)
 HEIGHT_BAND_COLORS = {
@@ -34,6 +40,24 @@ DEFAULT_COLOR = {"color": "#4a9eff", "opacity": 0.40}
 # Leaflet CDN (pinned version)
 LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
 LEAFLET_JS  = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+
+
+class MapBridge(QObject):
+    """
+    QObject exposed to JS via QWebChannel.
+    JS calls bbox_selected/site_marker_clicked → Python signals fire.
+    """
+    bbox_received  = pyqtSignal(float, float, float, float)  # min_lat,min_lon,max_lat,max_lon
+    marker_clicked = pyqtSignal(float, float, int)           # lat, lon, rank
+
+    @pyqtSlot(float, float, float, float)
+    def bbox_selected(self, min_lat: float, min_lon: float,
+                      max_lat: float, max_lon: float):
+        self.bbox_received.emit(min_lat, min_lon, max_lat, max_lon)
+
+    @pyqtSlot(float, float, int)
+    def site_marker_clicked(self, lat: float, lon: float, rank: int):
+        self.marker_clicked.emit(lat, lon, rank)
 
 
 class MapView(QWidget):
@@ -53,9 +77,29 @@ class MapView(QWidget):
         self._shadow_geojson = None           # stored GeoJSON dict for polygon mode
         self._shadow_segments_cache = []      # stored segments for polygon mode
         self._shadow_az_step_cache = 2.0
+        # Mutable band config — updated from control panel via set_height_band_config()
+        self._band_config: dict = {
+            h: {"color": v["color"], "opacity": v["opacity"]}
+            for h, v in HEIGHT_BAND_COLORS.items()
+        }
 
         # Fixed temp file path — overwritten cleanly each render
         self._tmp_path = Path(tempfile.gettempdir()) / "radar_map_view.html"
+
+        # QWebChannel bridge: lets JS call Python methods (bbox draw, marker click).
+        # QWebChannel is optional — if the DLL is unavailable the bridge is skipped
+        # and the Top-K JS features degrade silently; the rest of the map still works.
+        self._bridge = MapBridge(self)
+        if _HAS_WEBCHANNEL:
+            self._channel = _QWebChannel(self.web_engine.page())
+            self._channel.registerObject("bridge", self._bridge)
+            self.web_engine.page().setWebChannel(self._channel)
+        else:
+            self._channel = None
+
+        # Top-K and bbox state — persisted here so _render_map() always includes them
+        self._top_k_sites: list = []  # [(lat, lon, score_km2, elev_amsl_m), ...] or []
+        self._bbox: tuple | None = None  # (min_lat, min_lon, max_lat, max_lon) or None
 
         # Allow the local file:// page to load Leaflet + tile CDN URLs.
         # Without this, QWebEngine's security sandbox blocks remote URLs,
@@ -104,12 +148,18 @@ class MapView(QWidget):
         self.web_engine.setUrl(QUrl("about:blank"))
         self.web_engine.setUrl(QUrl.fromLocalFile(str(self._tmp_path)))
 
+    def set_height_band_config(self, bands: list):
+        """Update colour/opacity table from control panel band config."""
+        self._band_config = {
+            b["height_m"]: {"color": b["color"], "opacity": b["opacity"]}
+            for b in bands
+        }
+
     def _get_color_info(self, height_m) -> dict:
         """Return color dict for height band, falling back to DEFAULT_COLOR."""
-        # Try exact int match first, then int-cast (handles float keys like 50.0)
-        ci = HEIGHT_BAND_COLORS.get(height_m)
+        ci = self._band_config.get(height_m)
         if ci is None:
-            ci = HEIGHT_BAND_COLORS.get(int(height_m), DEFAULT_COLOR)
+            ci = self._band_config.get(int(height_m), DEFAULT_COLOR)
         return ci
 
     def _compute_polygon_area_km2(self, coords_latlon: list) -> float:
@@ -293,6 +343,38 @@ L.marker([{lat_e:.6f}, {lon_e:.6f}], {{
 
         return "\n".join(blocks)
 
+    def _generate_bbox_js(self) -> str:
+        """Generate JS to draw the bbox rectangle if one is set."""
+        bbox = getattr(self, '_bbox', None)
+        if bbox is None:
+            return ""
+        min_lat, min_lon, max_lat, max_lon = bbox
+        return (
+            f"L.rectangle([[{min_lat},{min_lon}],[{max_lat},{max_lon}]], "
+            f"{{color:'#4488ff',weight:2,fill:false,dashArray:'6 4',interactive:false}}"
+            f").addTo(map);"
+        )
+
+    def _generate_top_k_js(self) -> str:
+        """Generate JS to draw top-K ranked circle markers."""
+        if not getattr(self, '_top_k_sites', None):
+            return ""
+        colors = ["'#ffd700'", "'#c0c0c0'", "'#cd7f32'"]
+        blocks = []
+        for rank, (lat, lon, score, *_) in enumerate(self._top_k_sites, start=1):
+            color = colors[rank - 1] if rank <= 3 else "'#4fc3f7'"
+            tooltip = f"#{rank} &mdash; {score:.0f} km&sup2;"
+            blocks.append(
+                f"(function(lat,lon,rank){{"
+                f"L.circleMarker([lat,lon],{{radius:13,color:'#fff',weight:2,"
+                f"fillColor:{color},fillOpacity:0.92}})"
+                f".bindTooltip('{tooltip}',{{permanent:false}})"
+                f".on('click',function(){{if(bridge)bridge.site_marker_clicked(lat,lon,rank);}})"
+                f".addTo(map);"
+                f"}})({lat},{lon},{rank});"
+            )
+        return "\n        ".join(blocks)
+
     def _generate_leaflet_html(self, lat: float, lon: float,
                                coverage_features: list,
                                shadow_features: list = None) -> str:
@@ -377,6 +459,8 @@ L.polygon({latlngs_json}, {{
         legend_html = "\n".join(legend_rows) if legend_rows else ""
 
         range_rings_js = self._generate_range_rings_js(lat, lon, self._max_range_m)
+        bbox_js = self._generate_bbox_js()
+        topk_js = self._generate_top_k_js()
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -386,6 +470,9 @@ L.polygon({latlngs_json}, {{
   <title>Radar Coverage Map</title>
   <link rel="stylesheet" href="{LEAFLET_CSS}"/>
   <script src="{LEAFLET_JS}"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <style>
     html, body, #map {{
       margin: 0; padding: 0;
@@ -447,6 +534,46 @@ L.polygon({latlngs_json}, {{
 
     // ── range rings ──────────────────────────────────────────────────────
     {range_rings_js}
+
+    // ── bbox rectangle ───────────────────────────────────────────────────
+    {bbox_js}
+
+    // ── top-K site markers ───────────────────────────────────────────────
+    {topk_js}
+
+    // ── QWebChannel bridge ────────────────────────────────────────────────
+    var bridge = null;
+    if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined') {{
+        new QWebChannel(qt.webChannelTransport, function(channel) {{
+            bridge = channel.objects.bridge;
+        }});
+    }}
+
+    // ── Leaflet.draw — rectangle only ─────────────────────────────────────
+    var drawnItems = new L.FeatureGroup().addTo(map);
+    var drawControl = new L.Control.Draw({{
+        draw: {{
+            rectangle: true,
+            polygon: false, polyline: false,
+            circle: false, marker: false, circlemarker: false
+        }},
+        edit: false
+    }});
+    map.addControl(drawControl);
+
+    map.on(L.Draw.Event.CREATED, function(e) {{
+        drawnItems.clearLayers();
+        drawnItems.addLayer(e.layer);
+        var b = e.layer.getBounds();
+        if (bridge) {{
+            bridge.bbox_selected(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+        }}
+    }});
+
+    // ── enableDrawMode: activate Leaflet.draw rectangle tool programmatically
+    function enableDrawMode() {{
+        new L.Draw.Rectangle(map, drawControl.options.draw.rectangle).enable();
+    }}
   </script>
 </body>
 </html>"""
@@ -551,6 +678,32 @@ L.polygon({latlngs_json}, {{
             )
         else:
             self._shadow_geojson = None
+        features = self._build_coverage_features(self.coverage_data)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
+
+    def enable_draw_mode(self):
+        """Tell Leaflet to activate the rectangle draw tool."""
+        self.web_engine.page().runJavaScript("enableDrawMode()")
+
+    def show_bbox_rect(self, min_lat: float, min_lon: float,
+                       max_lat: float, max_lon: float):
+        """Store bbox state and re-render map with blue dashed rectangle."""
+        self._bbox = (min_lat, min_lon, max_lat, max_lon)
+        features = self._build_coverage_features(self.coverage_data)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
+
+    def show_top_k_sites(self, top_k: list):
+        """
+        Store top-K sites and re-render map with numbered circle markers.
+        top_k: [(lat, lon, score_km2), ...] sorted best-first
+        """
+        self._top_k_sites = list(top_k)
+        features = self._build_coverage_features(self.coverage_data)
+        self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
+
+    def clear_top_k(self):
+        """Remove top-K markers from map and re-render."""
+        self._top_k_sites = []
         features = self._build_coverage_features(self.coverage_data)
         self._render_map(self.radar_lat, self.radar_lon, features, self._shadow_features)
 
