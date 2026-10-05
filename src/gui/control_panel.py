@@ -23,6 +23,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
 
+# Wait this long after the last lat/lon edit before reading the DEM ground height
+GROUND_LOOKUP_DEBOUNCE_MS = 300
+
 
 # Default height bands — Cambridge Pixel colors + opacities
 DEFAULT_HEIGHT_BANDS = [
@@ -109,7 +112,19 @@ class ControlPanel(QWidget):
         self.spin_site_elev = QSpinBox()
         self.spin_site_elev.setRange(0, 9000)
         self.spin_site_elev.setValue(100)
-        self.spin_site_elev.setToolTip("Site elevation above mean sea level")
+        self.spin_site_elev.setToolTip(
+            "Site elevation above mean sea level. Filled in from the DEM when a DEM "
+            "is loaded or the location changes; edit to override."
+        )
+        # Shows where the site elevation came from (DEM lookup or manual)
+        self.label_ground_hint = QLabel("")
+        self.label_ground_hint.setStyleSheet("color: #888; font-size: 11px;")
+        self.label_ground_hint.setWordWrap(True)
+        # Debounce DEM lookups while the user is typing coordinates
+        self._ground_timer = QTimer(self)
+        self._ground_timer.setSingleShot(True)
+        self._ground_timer.setInterval(GROUND_LOOKUP_DEBOUNCE_MS)
+        self._ground_timer.timeout.connect(self._update_ground_elevation)
 
         self.label_mast_height = QLabel("Mast Height (m):")
         self.spin_mast_height = QSpinBox()
@@ -363,6 +378,7 @@ class ControlPanel(QWidget):
 
         gr_layout.addWidget(self.label_site_elev)
         gr_layout.addWidget(self.spin_site_elev)
+        gr_layout.addWidget(self.label_ground_hint)
 
         gr_layout.addWidget(self.label_mast_height)
         gr_layout.addWidget(self.spin_mast_height)
@@ -516,6 +532,8 @@ class ControlPanel(QWidget):
     def _connect_signals(self):
         """Connect internal signals (K-factor and diffraction sliders)."""
         self.slider_k_factor.valueChanged.connect(self._on_k_factor_changed)
+        self.spin_lat.valueChanged.connect(self._ground_timer.start)
+        self.spin_lon.valueChanged.connect(self._ground_timer.start)
         self.slider_diffraction.valueChanged.connect(self._on_diffraction_changed)
         self.slider_coverage_opacity.valueChanged.connect(self._on_coverage_opacity_changed)
         self.slider_shadow_opacity.valueChanged.connect(self._on_shadow_opacity_changed)
@@ -715,6 +733,31 @@ class ControlPanel(QWidget):
         """Set DEM path and update UI."""
         self.dem_path = path
         self.line_dem.setText(path)
+        self._update_ground_elevation()
+
+    def _update_ground_elevation(self):
+        """Fill Site Elevation from the DEM ground height at the current lat/lon.
+
+        A site elevation below the real ground puts the antenna inside the
+        neighbouring terrain and silently collapses coverage, so the DEM value is
+        the default. The user can still type a different value afterwards.
+        """
+        self._ground_timer.stop()
+        if not self.dem_path:
+            return
+        from src.site_optimizer import sample_ground_elevation_m
+        try:
+            ground_m = sample_ground_elevation_m(
+                self.dem_path, self.spin_lat.value(), self.spin_lon.value()
+            )
+        except Exception as exc:
+            self.label_ground_hint.setText(f"Could not read DEM: {exc}")
+            return
+        if ground_m is None:
+            self.label_ground_hint.setText("Location is outside the DEM — enter elevation manually.")
+            return
+        self.spin_site_elev.setValue(round(ground_m))
+        self.label_ground_hint.setText(f"Ground height from DEM: {ground_m:.0f} m (edit to override)")
 
     def set_obstructions_path(self, path: str):
         """Set obstructions path and update UI."""
@@ -868,7 +911,11 @@ class ControlPanel(QWidget):
         self.spin_lat.setValue(lat)
         self.spin_lon.setValue(lon)
         if elev_amsl_m is not None:
+            # Explicit elevation wins over the debounced DEM lookup queued by the
+            # lat/lon change above
+            self._ground_timer.stop()
             self.spin_site_elev.setValue(round(elev_amsl_m))
+            self.label_ground_hint.setText(f"Ground height from DEM: {elev_amsl_m:.0f} m (edit to override)")
 
     def build_request(self):
         """

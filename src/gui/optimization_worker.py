@@ -18,7 +18,9 @@ import numpy as np
 import rasterio
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.site_optimizer import generate_grid_points, compute_coverage_score
+from src.site_optimizer import (
+    generate_grid_points, compute_coverage_score, refine_pool_size, select_refine_pool,
+)
 from src.gui.control_panel import ComputationRequest
 
 # Scout resolution: ~100x faster than Ultra (0.5°/50m)
@@ -31,8 +33,9 @@ class OptimizationWorker(QThread):
     Grid-search top-K site optimizer for radar coverage.
 
     Spawns candidate sites across a bounding box, evaluates each using
-    compute_coverage_score() with coarse scout resolution, and emits the
-    top-K sites ranked by total coverage area.
+    compute_coverage_score() with coarse scout resolution, re-scores the best
+    scout candidates at full resolution, and emits the top-K sites ranked by
+    full-resolution coverage area.
     """
 
     site_scored           = pyqtSignal(int, int)   # (i_done, total)
@@ -79,8 +82,11 @@ class OptimizationWorker(QThread):
         1. Load DEM once (avoid N rasterio.open() calls for N candidates)
         2. Generate grid points over the bbox
         3. Evaluate each candidate with scout resolution
-        4. Sort by coverage area (descending)
-        5. Emit top-K or error
+        4. Re-score the best scout candidates at full (Ultra) resolution —
+           the scout pass misses terrain near the antenna, so its ranking alone
+           is unreliable
+        5. Sort by full-resolution coverage area (descending)
+        6. Emit top-K or error
         """
         try:
             # Load DEM once — avoids N rasterio.open() calls (one per candidate)
@@ -97,8 +103,10 @@ class OptimizationWorker(QThread):
 
             # Generate candidate sites across the bounding box
             points = generate_grid_points(*self.bbox, self.grid_step_m)
-            total = len(points)
-            self.progress_update.emit(f"Evaluating {total} candidate sites...")
+            n_points = len(points)
+            # Progress covers both passes: scout every point, then refine the shortlist
+            total = n_points + min(n_points, refine_pool_size(self.k))
+            self.progress_update.emit(f"Evaluating {n_points} candidate sites...")
 
             # Mast + antenna height above ground level, preserved across all candidates
             _mast_agl = (self.request_template.antenna_amsl_m
@@ -147,8 +155,33 @@ class OptimizationWorker(QThread):
                 # Emit progress
                 self.site_scored.emit(i + 1, total)
 
-            # Sort by score descending and take top-K
-            top_k = sorted(scores, key=lambda x: -x[2])[: self.k]
+            # Refine: re-score the scout shortlist at full resolution. The template's
+            # azimuth/range steps are the Ultra defaults from ComputationRequest.
+            pool = select_refine_pool(scores, self.k)
+            self.progress_update.emit(
+                f"Refining best {len(pool)} sites at full resolution..."
+            )
+            refined = []
+            for j, (lat, lon, _scout_score, candidate_elev) in enumerate(pool):
+                if self._cancelled:
+                    return
+                req = dataclasses.replace(
+                    self.request_template,
+                    radar_lat=lat,
+                    radar_lon=lon,
+                    site_elevation_amsl_m=candidate_elev,
+                    antenna_amsl_m=candidate_elev + _mast_agl,
+                )
+                try:
+                    score = compute_coverage_score(req, dem_data=_dem_data, dem_transform=_dem_transform,
+                                                   bbox=self.bbox)
+                    refined.append((lat, lon, score, candidate_elev))
+                except Exception:
+                    pass
+                self.site_scored.emit(n_points + j + 1, total)
+
+            # Sort by full-resolution score descending and take top-K
+            top_k = sorted(refined, key=lambda x: -x[2])[: self.k]
             self.optimization_complete.emit(top_k)
 
         except Exception as exc:

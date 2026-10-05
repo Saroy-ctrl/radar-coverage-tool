@@ -38,6 +38,10 @@ DARK_BG = "#1e1e2e"
 DARK_PANEL = "#2a2a3e"
 ACCENT_TEXT = "#e8e8e8"
 
+# Legend x-position in axes fractions (1.0 = right edge of the polar circle);
+# the gap clears the 90° tick label
+LEGEND_X_OFFSET_AXES = 1.15
+
 
 class PolarView(QWidget):
     """Matplotlib polar diagram embedded in PyQt6."""
@@ -201,9 +205,10 @@ class PolarView(QWidget):
         self.ax.set_ylabel("Range (km)", color=ACCENT_TEXT, labelpad=40, fontsize=10)
         self.ax.set_title("Coverage Diagram (OVD)", color=ACCENT_TEXT, pad=8, fontsize=11, fontweight='bold')
 
-        # Legend with dark background
+        # Legend with dark background — anchored by its upper-LEFT corner just
+        # right of the circle so it never overlaps the plot
         legend = self.ax.legend(
-            loc='upper right', bbox_to_anchor=(1.25, 1.1),
+            loc='upper left', bbox_to_anchor=(LEGEND_X_OFFSET_AXES, 1.0),
             framealpha=0.9, fancybox=True, shadow=False,
             fontsize=9
         )

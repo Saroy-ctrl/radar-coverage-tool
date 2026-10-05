@@ -1,9 +1,11 @@
 """
 Site Optimizer — Grid search for top-K radar sites by total coverage area.
 
-Provides two pure-Python functions (no Qt):
+Provides pure-Python functions (no Qt):
 - generate_grid_points: geodesic grid over a bounding box
 - compute_coverage_score: replicate ComputationWorker radial math, return total km²
+- select_refine_pool: shortlist of best scout-scored candidates to re-score at full resolution
+- sample_ground_elevation_m: DEM ground height at a single (lat, lon)
 
 Reference: ComputationWorker.run() in src/gui/main_window.py (lines 59–346).
 No Qt imports anywhere in this module.
@@ -21,6 +23,13 @@ from src.obstruction_engine import ObstructionEngine
 # Module-level geodetic object — same pattern as ComputationWorker.
 # GEOD.fwd(lon, lat, az, dist) → (lon_new, lat_new, back_az)  — lon is FIRST.
 GEOD = Geod(ellps='WGS84')
+
+# Two-stage Top-K ranking. The coarse scout pass (500 m range step) skips terrain
+# close to the antenna, which is what blocks low targets most, so its ranking is
+# unreliable on its own (Tenerife test: scout top-5 contained 0 of the true top-5).
+# Re-scoring a shortlist at full resolution recovered all 5 for ~8 s extra.
+REFINE_POOL_MIN = 20     # candidates re-scored at full resolution, at least
+REFINE_POOL_FACTOR = 4   # ... or this many per requested site, whichever is larger
 
 
 def generate_grid_points(
@@ -377,3 +386,47 @@ def compute_coverage_score(request, *, dem_data: np.ndarray = None, dem_transfor
 
     area_m2, _ = GEOD.geometry_area_perimeter(poly)
     return abs(area_m2) / 1e6
+
+
+def refine_pool_size(k: int) -> int:
+    """Number of scout-ranked candidates to re-score at full resolution for top-k."""
+    return max(REFINE_POOL_MIN, REFINE_POOL_FACTOR * k)
+
+
+def select_refine_pool(scored: list, k: int) -> list:
+    """
+    Shortlist the best scout-scored candidates for the full-resolution pass.
+
+    Args:
+        scored: [(lat, lon, score_km2, elev_amsl_m), ...] from the scout pass
+        k: number of sites the user asked for
+
+    Returns:
+        Up to refine_pool_size(k) entries, highest score first.
+    """
+    return sorted(scored, key=lambda s: -s[2])[: refine_pool_size(k)]
+
+
+def sample_ground_elevation_m(dem_path: str, lat: float, lon: float):
+    """
+    Ground height (m AMSL) of the DEM pixel containing (lat, lon).
+
+    Returns the pixel that contains the point (floor of the corner-based pixel
+    index) and uses the same nodata/out-of-range → 0 m (sea level) convention
+    as ComputationWorker.
+
+    Returns:
+        float elevation in metres, or None if (lat, lon) is outside the DEM.
+    """
+    with rasterio.open(dem_path) as src:
+        transform = src.transform
+        col = (lon - transform.c) / transform.a
+        row = (lat - transform.f) / transform.e
+        if not (0 <= row < src.height and 0 <= col < src.width):
+            return None
+        r, c = int(row), int(col)   # non-negative here, so int() == floor
+        value = float(src.read(1, window=((r, r + 1), (c, c + 1)))[0, 0])
+        nodata = src.nodata
+    if (nodata is not None and value == nodata) or value < -500 or value > 9000:
+        return 0.0
+    return value
