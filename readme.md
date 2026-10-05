@@ -189,12 +189,23 @@ lat,lon,height_amsl_m,type,description
 |---------|-----|
 | `python` is not recognised | Python isn't on your PATH. Reinstall and tick **"Add python.exe to PATH"**, or use Anaconda Prompt |
 | `ModuleNotFoundError: No module named ...` | Step 3 wasn't completed in this terminal. With Anaconda, run `conda activate radar` first |
-| `DLL load failed while importing QtWidgets` (Windows) | PyQt6 install is broken or mismatched. Run `pip install --force-reinstall PyQt6 PyQt6-WebEngine` inside the same environment |
+| `conda activate radar` in PowerShell prints `invalid choice: ''` | Older conda versions don't work with PowerShell 7.5+. Use **Anaconda Prompt** instead, or update conda: `& "<anaconda folder>\Scripts\conda.exe" update -n base conda -y` |
+| `DLL load failed while importing QtWidgets` (Windows) | Usually the environment isn't activated, so Windows picks up DLLs from another Python. Run `conda activate radar` first. If it still fails, run `pip install --force-reinstall PyQt6 PyQt6-WebEngine` inside the environment |
 | Map area is blank or grey | No internet connection. The background map loads online |
 | **Draw Rectangle on Map** does nothing | Some PyQt6 installs lack the map-to-app link. Type the search-area corners into the boxes instead |
 | Coverage looks like a perfect circle | The terrain file doesn't cover your radar location. Check the lat/lon, and that you downloaded the right tile |
+| Coverage is tiny or mostly shadow even over flat ground | Check **Site Elevation**. If it is lower than the real ground, the antenna sits "inside" the hill next to it. Re-enter the latitude/longitude to refill it from the terrain file |
 | Coverage looks far too big over land | The terrain file is too small for your Max Range. Use a bigger area or a lower range |
 | Top-K search is slow | Increase the **m grid** step or make the search area smaller |
+
+---
+
+## Known limitations
+
+- **Export GeoJSON** is not finished. The saved shapes don't yet match the map.
+- **Top-K can suggest sites in the sea** if your search area includes water. Keep the search box over land, or ignore results with a site elevation of 0 m.
+- The **"Horizon" line** on the polar chart is drawn on the range axis, so its size is not meaningful. Use the coloured coverage lines instead.
+- The background map needs an internet connection.
 
 ---
 
