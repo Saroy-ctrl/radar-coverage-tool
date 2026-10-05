@@ -120,7 +120,7 @@ Work down the left-hand panel from top to bottom:
 
 1. **DEM File:** click **Browse DEM...** and choose your `.tif` terrain file.
 2. **Antenna Location:** type the radar's **Latitude** and **Longitude** in decimal degrees. North and East are positive; South and West are negative. Example: `51.13`, `1.32`.
-3. **Site Elevation AMSL (m):** the ground height at the radar, in metres above sea level.
+3. **Site Elevation AMSL (m):** the ground height at the radar, in metres above sea level. This is **filled in automatically** from the terrain file once you set the location. Change it only if you know better, for example for a radar on a rooftop.
 4. **Mast Height / Antenna Height (m):** how high the antenna sits above the ground.
 5. **Max Instrumented Range (km):** how far the radar can see at most.
 6. **Target Flight Heights:** the aircraft heights to check, in metres above the ground. Five are set by default. You can:
@@ -163,7 +163,7 @@ The **Top-K Site Finder** tests many possible radar positions inside an area and
    - **m grid:** the grid step, i.e. the spacing between test positions. Smaller means more sites, which is slower but more thorough,
    - **Target height range:** the aircraft heights to plan for.
    The panel shows roughly how many sites will be tested.
-4. Click **Find Top-K Sites**. A progress count appears, and you can stop at any time with **Cancel Search**.
+4. Click **Find Top-K Sites**. It first does a quick scan of every candidate, then re-checks the best ones in full detail. A progress count appears, and you can stop at any time with **Cancel Search**.
 5. Results are listed as `X km² @ N m AGL`: the area covered at the lowest target height. Click **ℹ** for a full explanation.
 6. Click **Load** next to any result. This moves the radar there (with its correct ground height) and computes its full coverage straight away.
 
