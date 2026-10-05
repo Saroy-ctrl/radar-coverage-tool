@@ -342,41 +342,38 @@ def compute_coverage_score(request, *, dem_data: np.ndarray = None, dem_transfor
     else:
         d_bbox = None
 
-    total_area_km2 = 0.0
+    # Score by the minimum height band only — the binding constraint.
+    # Coverage at a lower AGL target is always harder to achieve than at a
+    # higher target (terrain occults more), so maximising bbox coverage at
+    # min_h implicitly maximises it across the entire user-specified range.
+    # Using the max-height polygon (or a union) would be dominated by the
+    # easiest-to-achieve band and collapse all high-elevation sites to the
+    # same score.
+    score_h = min(heights_agl)
+    ranges_h = coverage_ranges_m[score_h].copy()
 
-    for h in heights_agl:
-        ranges_h = coverage_ranges_m[h].copy()
+    # Clamp degenerate near-zero radii
+    ranges_h = np.where(ranges_h < RANGE_STEP_M, RANGE_STEP_M, ranges_h)
 
-        # Clamp degenerate near-zero radii (same guard as before)
+    if d_bbox is not None:
+        ranges_h = np.minimum(ranges_h, d_bbox)
         ranges_h = np.where(ranges_h < RANGE_STEP_M, RANGE_STEP_M, ranges_h)
 
-        if d_bbox is not None:
-            # Cap each azimuth at the distance to the bbox edge
-            ranges_h = np.minimum(ranges_h, d_bbox)
-            # Re-apply degenerate guard: d_bbox can be < RANGE_STEP_M for a
-            # site very close to a bbox edge (corner azimuths approach zero)
-            ranges_h = np.where(ranges_h < RANGE_STEP_M, RANGE_STEP_M, ranges_h)
+    lons_p, lats_p, _ = GEOD.fwd(
+        np.full(n_az, ant_lon),
+        np.full(n_az, ant_lat),
+        azimuths,
+        ranges_h,
+    )
+    lat_list = lats_p.tolist() + [lats_p[0]]
+    lon_list = lons_p.tolist() + [lons_p[0]]
+    coords = list(zip(lon_list, lat_list))
 
-        # Vectorised geodetic forward: all azimuths at once (lon first)
-        lons_p, lats_p, _ = GEOD.fwd(
-            np.full(n_az, ant_lon),
-            np.full(n_az, ant_lat),
-            azimuths,
-            ranges_h,
-        )
-        # Close the ring: first coord == last coord (GeoJSON polygon convention)
-        lat_list = lats_p.tolist() + [lats_p[0]]
-        lon_list = lons_p.tolist() + [lons_p[0]]
-        coords = list(zip(lon_list, lat_list))
+    poly = shapely.geometry.Polygon(coords)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    if poly.is_empty:
+        return 0.0
 
-        poly = shapely.geometry.Polygon(coords)
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        if poly.is_empty:
-            continue
-
-        # geometry_area_perimeter returns signed area; abs() handles winding order
-        area_m2, _ = GEOD.geometry_area_perimeter(poly)
-        total_area_km2 += abs(area_m2) / 1e6
-
-    return total_area_km2
+    area_m2, _ = GEOD.geometry_area_perimeter(poly)
+    return abs(area_m2) / 1e6

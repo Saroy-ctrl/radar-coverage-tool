@@ -18,6 +18,12 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
+
+class _RadarToolbar(NavigationToolbar2QT):
+    """Minimal toolbar: only Home (reset view) and Save (multi-format export)."""
+    toolitems = [t for t in NavigationToolbar2QT.toolitems
+                 if t[0] in ('Home', 'Save')]
+
 # Height band colors (Cambridge Pixel convention)
 HEIGHT_BAND_COLORS = {
     50: "#00cc44",
@@ -45,6 +51,7 @@ class PolarView(QWidget):
         self.current_height = 500  # Default selected height
         self.coverage_data = {}
         self.horizon_data = None
+        self._band_colors: dict = dict(HEIGHT_BAND_COLORS)  # mutable copy
 
         self._create_widgets()
         self._create_initial_plot()
@@ -59,7 +66,7 @@ class PolarView(QWidget):
         self.canvas = FigureCanvas(self.fig)
 
         # Create toolbar
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar = _RadarToolbar(self.canvas, self)
         self._style_toolbar()
 
         # Create layout
@@ -121,6 +128,10 @@ class PolarView(QWidget):
         self.fig.tight_layout(pad=0.5)
         self.canvas.draw()
 
+    def set_height_band_config(self, bands: list):
+        """Update band colour table from control panel config."""
+        self._band_colors = {b["height_m"]: b["color"] for b in bands}
+
     def update_data(self, polar_data: dict):
         """
         Update polar diagram with new data.
@@ -163,7 +174,7 @@ class PolarView(QWidget):
         heights_sorted = sorted(self.coverage_data.keys(), reverse=True)
         for height_m in heights_sorted:
             ranges_km = self.coverage_data[height_m]
-            color = HEIGHT_BAND_COLORS.get(height_m, "#4a9eff")
+            color = self._band_colors.get(height_m) or self._band_colors.get(int(height_m), "#4a9eff")
 
             # Plot as filled area
             self.ax.fill_between(

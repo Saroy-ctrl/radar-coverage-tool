@@ -104,7 +104,13 @@ def _make_map_view():
     RealMapView = mv_mod.MapView
 
     # --- 3. Bypass __init__ — pure method, no Qt state needed --------------
-    return object.__new__(RealMapView)
+    mv = object.__new__(RealMapView)
+    # __init__ is skipped, so seed the default band colour table it would set
+    mv._band_config = {
+        h: {"color": v["color"], "opacity": v["opacity"]}
+        for h, v in mv_mod.HEIGHT_BAND_COLORS.items()
+    }
+    return mv
 
 
 def test_build_shadow_features_full_coverage_no_shadow():

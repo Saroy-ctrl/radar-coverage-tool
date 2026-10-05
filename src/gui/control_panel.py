@@ -17,21 +17,21 @@ import math
 from dataclasses import dataclass
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QSpinBox, QDoubleSpinBox,
-    QSlider, QPushButton, QCheckBox, QFileDialog,
+    QSlider, QPushButton, QCheckBox, QFileDialog, QColorDialog, QMessageBox,
     QProgressBar, QComboBox, QLineEdit, QScrollArea
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor
 
 
-# Default height bands with Cambridge Pixel colors
-HEIGHT_BANDS = {
-    50: {"color": "#00cc44", "name": "50m (low)"},
-    100: {"color": "#aacc00", "name": "100m (low-mid)"},
-    500: {"color": "#ff8800", "name": "500m (mid)"},
-    1000: {"color": "#ff3300", "name": "1000m (high)"},
-    3000: {"color": "#cc00ff", "name": "3000m (very high)"},
-}
+# Default height bands — Cambridge Pixel colors + opacities
+DEFAULT_HEIGHT_BANDS = [
+    {"height_m": 50,   "color": "#00cc44", "opacity": 0.45},
+    {"height_m": 100,  "color": "#aacc00", "opacity": 0.38},
+    {"height_m": 500,  "color": "#ff8800", "opacity": 0.32},
+    {"height_m": 1000, "color": "#ff3300", "opacity": 0.22},
+    {"height_m": 3000, "color": "#cc00ff", "opacity": 0.15},
+]
 
 
 
@@ -62,9 +62,11 @@ class ControlPanel(QWidget):
     load_dem_requested = pyqtSignal()
     load_obstructions_requested = pyqtSignal()
     export_geojson_requested = pyqtSignal()
+    export_png_requested = pyqtSignal()
     coverage_opacity_changed = pyqtSignal(float)
     shadow_opacity_changed = pyqtSignal(float)
     shadow_mode_changed = pyqtSignal(str)
+    height_bands_config_changed = pyqtSignal(list)  # [{height_m, color, opacity, enabled}, ...]
 
     # Top-K Site Finder signals
     find_top_k_requested = pyqtSignal(float, float, float, float, int, int, float, float)
@@ -148,29 +150,17 @@ class ControlPanel(QWidget):
         self.label_diffraction_value = QLabel("0.5°")
         self.label_diffraction_value.setMinimumWidth(35)
 
-        # === Height Bands (inline rows, no table) ===
-        self._band_checkboxes: dict[int, QCheckBox] = {}
-        self._height_bands_layout = QVBoxLayout()
-        self._height_bands_layout.setSpacing(4)
-        for height, info in HEIGHT_BANDS.items():
-            row = QHBoxLayout()
-            row.setSpacing(8)
-
-            cb = QCheckBox(info["name"])
-            cb.setChecked(True)
-            self._band_checkboxes[height] = cb
-
-            swatch = QLabel()
-            swatch.setFixedSize(18, 18)
-            swatch.setStyleSheet(
-                f"background-color: {info['color']}; "
-                f"border: 1px solid #555; border-radius: 2px;"
-            )
-
-            row.addWidget(cb)
-            row.addWidget(swatch)
-            row.addStretch()
-            self._height_bands_layout.addLayout(row)
+        # === Height Bands (dynamic rows with editable height + color picker) ===
+        self._band_rows: list[dict] = []
+        self._bands_container = QWidget()
+        self._bands_layout = QVBoxLayout(self._bands_container)
+        self._bands_layout.setSpacing(4)
+        self._bands_layout.setContentsMargins(0, 0, 0, 0)
+        self.btn_add_band = QPushButton("+ Add Band")
+        self.btn_add_band.clicked.connect(self._on_add_band)
+        # Populate defaults — emit=False because signal connections don't exist yet
+        for band in DEFAULT_HEIGHT_BANDS:
+            self._add_band_row(band["height_m"], band["color"], band["opacity"], emit=False)
 
         # === DEM Source Group ===
         self.label_dem = QLabel("DEM File:")
@@ -253,24 +243,28 @@ class ControlPanel(QWidget):
         self.spin_bbox_min_lat.setRange(-90.0, 90.0)
         self.spin_bbox_min_lat.setDecimals(4)
         self.spin_bbox_min_lat.setValue(51.0)
+        self.spin_bbox_min_lat.setPrefix("Min ")
         self.spin_bbox_min_lat.setSuffix("° N")
 
         self.spin_bbox_max_lat = QDoubleSpinBox()
         self.spin_bbox_max_lat.setRange(-90.0, 90.0)
         self.spin_bbox_max_lat.setDecimals(4)
         self.spin_bbox_max_lat.setValue(51.5)
+        self.spin_bbox_max_lat.setPrefix("Max ")
         self.spin_bbox_max_lat.setSuffix("° N")
 
         self.spin_bbox_min_lon = QDoubleSpinBox()
         self.spin_bbox_min_lon.setRange(-180.0, 180.0)
         self.spin_bbox_min_lon.setDecimals(4)
         self.spin_bbox_min_lon.setValue(0.0)
+        self.spin_bbox_min_lon.setPrefix("Min ")
         self.spin_bbox_min_lon.setSuffix("° E")
 
         self.spin_bbox_max_lon = QDoubleSpinBox()
         self.spin_bbox_max_lon.setRange(-180.0, 180.0)
         self.spin_bbox_max_lon.setDecimals(4)
         self.spin_bbox_max_lon.setValue(0.5)
+        self.spin_bbox_max_lon.setPrefix("Max ")
         self.spin_bbox_max_lon.setSuffix("° E")
 
         self.btn_draw_bbox = QPushButton("Draw Rectangle on Map")
@@ -292,12 +286,14 @@ class ControlPanel(QWidget):
         self.spin_score_min_height.setRange(0, 10000)
         self.spin_score_min_height.setSingleStep(50)
         self.spin_score_min_height.setValue(100)
+        self.spin_score_min_height.setPrefix("Min: ")
         self.spin_score_min_height.setSuffix(" m")
 
         self.spin_score_max_height = QSpinBox()
         self.spin_score_max_height.setRange(0, 10000)
         self.spin_score_max_height.setSingleStep(50)
         self.spin_score_max_height.setValue(500)
+        self.spin_score_max_height.setPrefix("Max: ")
         self.spin_score_max_height.setSuffix(" m")
 
         self.label_site_estimate = QLabel("Set a bbox and grid step to estimate site count")
@@ -307,9 +303,16 @@ class ControlPanel(QWidget):
         self.btn_find_top_k = QPushButton("Find Top-K Sites")
         self.btn_find_top_k.clicked.connect(self._on_find_top_k_clicked)
 
+        self.btn_score_info = QPushButton("ℹ")
+        self.btn_score_info.setFixedWidth(28)
+        self.btn_score_info.setToolTip("How is the score calculated?")
+        self.btn_score_info.clicked.connect(self._on_score_info_clicked)
+
         self.btn_cancel_optimization = QPushButton("Cancel Search")
         self.btn_cancel_optimization.setVisible(False)
         self.btn_cancel_optimization.clicked.connect(lambda: self.cancel_optimization.emit())
+
+        self._last_score_height_m: float = 100.0  # updated each time Find is clicked
 
         self.progress_bar_optimization = QProgressBar()
         self.progress_bar_optimization.setRange(0, 100)
@@ -329,14 +332,17 @@ class ControlPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Scroll area
+        # Scroll area — horizontal bar appears only when the panel is dragged
+        # narrower than the content's minimum; vertical always auto.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setStyleSheet("QScrollArea { border: none; }")
 
         # Inner widget that holds all the actual content
         inner = QWidget()
+        inner.setMinimumWidth(295)   # prevents content from being clipped by splitter drag
         layout = QVBoxLayout(inner)
         layout.setSpacing(12)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -410,7 +416,11 @@ class ControlPanel(QWidget):
         # === Height Bands Group ===
         group_heights = QGroupBox("Target Flight Heights")
         gh_layout = QVBoxLayout()
-        gh_layout.addLayout(self._height_bands_layout)
+        add_row = QHBoxLayout()
+        add_row.addStretch()
+        add_row.addWidget(self.btn_add_band)
+        gh_layout.addLayout(add_row)
+        gh_layout.addWidget(self._bands_container)
         group_heights.setLayout(gh_layout)
         layout.addWidget(group_heights)
 
@@ -456,21 +466,17 @@ class ControlPanel(QWidget):
         group_topk = QGroupBox("Top-K Site Finder")
         gt_layout = QVBoxLayout()
 
-        # Bounding box
+        # Bounding box — two spinboxes per row; prefix already shows Min/Max
         gt_layout.addWidget(QLabel("Search Bounding Box:"))
-        bbox_row1 = QHBoxLayout()
-        bbox_row1.addWidget(QLabel("Min Lat:"))
-        bbox_row1.addWidget(self.spin_bbox_min_lat)
-        bbox_row1.addWidget(QLabel("Max Lat:"))
-        bbox_row1.addWidget(self.spin_bbox_max_lat)
-        gt_layout.addLayout(bbox_row1)
+        bbox_lat_row = QHBoxLayout()
+        bbox_lat_row.addWidget(self.spin_bbox_min_lat)
+        bbox_lat_row.addWidget(self.spin_bbox_max_lat)
+        gt_layout.addLayout(bbox_lat_row)
 
-        bbox_row2 = QHBoxLayout()
-        bbox_row2.addWidget(QLabel("Min Lon:"))
-        bbox_row2.addWidget(self.spin_bbox_min_lon)
-        bbox_row2.addWidget(QLabel("Max Lon:"))
-        bbox_row2.addWidget(self.spin_bbox_max_lon)
-        gt_layout.addLayout(bbox_row2)
+        bbox_lon_row = QHBoxLayout()
+        bbox_lon_row.addWidget(self.spin_bbox_min_lon)
+        bbox_lon_row.addWidget(self.spin_bbox_max_lon)
+        gt_layout.addLayout(bbox_lon_row)
 
         gt_layout.addWidget(self.btn_draw_bbox)
 
@@ -480,20 +486,19 @@ class ControlPanel(QWidget):
         settings_row.addWidget(self.spin_grid_step)
         gt_layout.addLayout(settings_row)
 
-        # Target height range for scoring
+        # Target height range for scoring — prefix shows Min:/Max:
         gt_layout.addWidget(QLabel("Target height range (AGL):"))
         height_row = QHBoxLayout()
-        height_row.addWidget(QLabel("Min:"))
         height_row.addWidget(self.spin_score_min_height)
-        height_row.addWidget(QLabel("Max:"))
         height_row.addWidget(self.spin_score_max_height)
         gt_layout.addLayout(height_row)
 
         gt_layout.addWidget(self.label_site_estimate)
 
-        # Action buttons
+        # Action buttons + info
         btn_row = QHBoxLayout()
-        btn_row.addWidget(self.btn_find_top_k)
+        btn_row.addWidget(self.btn_find_top_k, 1)
+        btn_row.addWidget(self.btn_score_info)
         btn_row.addWidget(self.btn_cancel_optimization)
         gt_layout.addLayout(btn_row)
 
@@ -547,6 +552,101 @@ class ControlPanel(QWidget):
     def _on_shadow_mode_changed(self, _index: int):
         mode = self.combo_shadow_mode.currentData()
         self.shadow_mode_changed.emit(mode)
+
+    # ------------------------------------------------------------------ #
+    # Height band management                                               #
+    # ------------------------------------------------------------------ #
+
+    def _add_band_row(self, height_m: int, color: str, opacity: float,
+                      emit: bool = True):
+        row_info = {"color": color, "opacity": opacity}
+
+        cb = QCheckBox()
+        cb.setChecked(True)
+        cb.stateChanged.connect(self._emit_band_config_changed)
+
+        spin = QSpinBox()
+        spin.setRange(1, 50000)
+        spin.setValue(int(height_m))
+        spin.setSuffix(" m")
+        spin.setFixedWidth(82)
+        spin.valueChanged.connect(self._emit_band_config_changed)
+
+        btn_color = QPushButton()
+        btn_color.setFixedSize(26, 26)
+        btn_color.setToolTip("Click to change colour")
+        self._apply_color_btn_style(btn_color, color)
+        btn_color.clicked.connect(
+            lambda checked, ri=row_info, bc=btn_color: self._pick_band_color(ri, bc)
+        )
+
+        btn_remove = QPushButton("−")
+        btn_remove.setFixedSize(26, 26)
+        btn_remove.setToolTip("Remove band")
+
+        row_layout = QHBoxLayout()
+        row_layout.setSpacing(6)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(cb)
+        row_layout.addWidget(spin)
+        row_layout.addWidget(btn_color)
+        row_layout.addWidget(btn_remove)
+        row_layout.addStretch()
+
+        row_widget = QWidget()
+        row_widget.setLayout(row_layout)
+
+        row_info.update({"checkbox": cb, "spin": spin,
+                         "btn_color": btn_color, "widget": row_widget})
+        btn_remove.clicked.connect(
+            lambda checked, ri=row_info: self._remove_band_row(ri)
+        )
+
+        self._band_rows.append(row_info)
+        self._bands_layout.addWidget(row_widget)
+        if emit:
+            self._emit_band_config_changed()
+
+    def _remove_band_row(self, row_info: dict):
+        if len(self._band_rows) <= 1:
+            return  # keep at least one band
+        self._bands_layout.removeWidget(row_info["widget"])
+        row_info["widget"].deleteLater()
+        self._band_rows.remove(row_info)
+        self._emit_band_config_changed()
+
+    def _on_add_band(self):
+        self._add_band_row(500, "#4a9eff", 0.30)
+
+    def _pick_band_color(self, row_info: dict, btn: QPushButton):
+        chosen = QColorDialog.getColor(QColor(row_info["color"]), self, "Choose Band Colour")
+        if chosen.isValid():
+            row_info["color"] = chosen.name()
+            self._apply_color_btn_style(btn, chosen.name())
+            self._emit_band_config_changed()
+
+    @staticmethod
+    def _apply_color_btn_style(btn: QPushButton, color: str):
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: {color}; border: 1px solid #555;"
+            f" border-radius: 3px; }}"
+            f"QPushButton:hover {{ border: 1px solid #bbb; }}"
+        )
+
+    def _emit_band_config_changed(self):
+        self.height_bands_config_changed.emit(self.get_band_config_list())
+
+    def get_band_config_list(self) -> list:
+        """Return current band config as a list of dicts for map/polar views."""
+        return [
+            {
+                "height_m": ri["spin"].value(),
+                "color": ri["color"],
+                "opacity": ri["opacity"],
+                "enabled": ri["checkbox"].isChecked(),
+            }
+            for ri in self._band_rows
+        ]
 
     def _on_load_dem_clicked(self):
         """Open DEM file dialog."""
@@ -609,8 +709,7 @@ class ControlPanel(QWidget):
 
     def _on_export_png_clicked(self):
         """Emit export PNG signal."""
-        # For now, just acknowledge
-        pass
+        self.export_png_requested.emit()
 
     def set_dem_path(self, path: str):
         """Set DEM path and update UI."""
@@ -623,8 +722,12 @@ class ControlPanel(QWidget):
         self.line_obstructions.setText(path)
 
     def _get_selected_height_bands(self) -> list[float]:
-        """Return heights (m) whose checkbox is enabled."""
-        return [float(h) for h, cb in self._band_checkboxes.items() if cb.isChecked()]
+        """Return heights (m) whose checkbox is enabled, sorted ascending."""
+        return sorted(
+            float(ri["spin"].value())
+            for ri in self._band_rows
+            if ri["checkbox"].isChecked()
+        )
 
     def set_computing_finished(self):
         """Called by main window when computation finishes."""
@@ -651,11 +754,31 @@ class ControlPanel(QWidget):
                                 self.spin_score_max_height.value()))
         score_max_h = float(max(self.spin_score_min_height.value(),
                                 self.spin_score_max_height.value()))
+        self._last_score_height_m = score_min_h  # store for result labels
         self.find_top_k_requested.emit(
             min_lat, min_lon, max_lat, max_lon,
             self.spin_top_k.value(),
             self.spin_grid_step.value(),
             score_min_h, score_max_h,
+        )
+
+    def _on_score_info_clicked(self):
+        h = int(self._last_score_height_m)
+        QMessageBox.information(
+            self, "How scores are calculated",
+            f"<b>Score = unique km² of bbox covered at {h} m AGL</b><br><br>"
+            f"Each candidate site is evaluated at <b>scout resolution</b> "
+            f"(5° azimuth / 500 m range, ~100× faster than full Ultra) "
+            f"using the same terrain-masked radial visibility as the main compute.<br><br>"
+            f"Coverage polygons are clipped to the search bounding box so sites "
+            f"near open ocean edges gain no unfair advantage.<br><br>"
+            f"Only the <b>minimum</b> target height ({h} m AGL) is scored — "
+            f"this is the binding constraint: a site that covers region X at {h} m "
+            f"also covers it at higher altitudes (targets clear terrain more easily). "
+            f"Maximising low-altitude coverage maximises coverage across the full "
+            f"target height range.<br><br>"
+            f"<i>Note: the displayed coverage diagram uses Ultra resolution and all "
+            f"enabled bands, so the visual circle may differ from the score.</i>"
         )
 
     def _emit_bbox_changed(self):
@@ -709,24 +832,35 @@ class ControlPanel(QWidget):
                 item.widget().deleteLater()
 
         for rank, (lat, lon, score, elev) in enumerate(top_k, start=1):
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            rank_label = QLabel(f"#{rank}")
-            rank_label.setMinimumWidth(24)
-            coord_label = QLabel(f"{lat:.3f}°N {lon:.3f}°E")
-            score_label = QLabel(f"{score:.0f} km²")
-            score_label.setMinimumWidth(64)
             load_btn = QPushButton("Load")
-            load_btn.setMaximumWidth(50)
+            load_btn.setFixedWidth(52)
             load_btn.clicked.connect(
                 lambda checked, la=lat, lo=lon, el=elev: self.load_site_requested.emit(la, lo, el)
             )
-            row.addWidget(rank_label)
-            row.addWidget(coord_label)
-            row.addWidget(score_label)
-            row.addWidget(load_btn)
+
+            # Top line: "#N  coord  [Load]"
+            top_row = QHBoxLayout()
+            top_row.setSpacing(6)
+            rank_label = QLabel(f"#{rank}")
+            rank_label.setFixedWidth(22)
+            coord_label = QLabel(f"{lat:.3f}°N {lon:.3f}°E")
+            top_row.addWidget(rank_label)
+            top_row.addWidget(coord_label, 1)
+            top_row.addWidget(load_btn)
+
+            # Bottom line: score @ scoring height in muted colour
+            h_str = f"{int(self._last_score_height_m)} m AGL"
+            score_label = QLabel(f"{score:.0f} km²  @  {h_str}")
+            score_label.setStyleSheet("color: #aaa; font-size: 11px; padding-left: 28px;")
+
+            card = QVBoxLayout()
+            card.setSpacing(1)
+            card.setContentsMargins(0, 4, 0, 4)
+            card.addLayout(top_row)
+            card.addWidget(score_label)
+
             row_widget = QWidget()
-            row_widget.setLayout(row)
+            row_widget.setLayout(card)
             self._results_layout.addWidget(row_widget)
 
     def set_radar_position(self, lat: float, lon: float, elev_amsl_m: float = None):

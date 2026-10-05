@@ -550,9 +550,9 @@ class MainWindow(QMainWindow):
 
         # Left: Control panel
         main_splitter.addWidget(self.control_panel)
-        self.control_panel.setMinimumWidth(255)
-        self.control_panel.setMaximumWidth(400)
-        main_splitter.setSizes([270, 1200])
+        self.control_panel.setMinimumWidth(310)
+        self.control_panel.setMaximumWidth(520)
+        main_splitter.setSizes([360, 1200])
 
         # Right: Vertical splitter for map and polar
         right_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -578,9 +578,14 @@ class MainWindow(QMainWindow):
         self.control_panel.load_dem_requested.connect(self._on_load_dem)
         self.control_panel.load_obstructions_requested.connect(self._on_load_obstructions)
         self.control_panel.export_geojson_requested.connect(self._on_export_geojson)
+        self.control_panel.export_png_requested.connect(self._on_export_png)
         self.control_panel.coverage_opacity_changed.connect(self.map_view.set_coverage_opacity)
         self.control_panel.shadow_opacity_changed.connect(self.map_view.set_shadow_opacity)
         self.control_panel.shadow_mode_changed.connect(self.map_view.set_shadow_mode)
+        self.control_panel.height_bands_config_changed.connect(self.map_view.set_height_band_config)
+        self.control_panel.height_bands_config_changed.connect(self.polar_view.set_height_band_config)
+        # Push initial band config so map/polar start with the right colours
+        self.control_panel._emit_band_config_changed()
 
         # Top-K Site Finder connections
         self.control_panel.draw_bbox_requested.connect(self.map_view.enable_draw_mode)
@@ -823,36 +828,49 @@ class MainWindow(QMainWindow):
             self, "Save Coverage as GeoJSON", "",
             "GeoJSON (*.geojson);;All Files (*)"
         )
-        if path:
-            try:
-                import json
-                from src.coverage_engine import CoverageEngine
-                engine = CoverageEngine()
+        if not path:
+            return
 
-                # Build a merged FeatureCollection from all height bands
-                all_geojsons = []
-                for height_m, band_data in self._last_coverage_data.items():
-                    coords = band_data["outer"] if isinstance(band_data, dict) else band_data
-                    if len(coords) < 3:
-                        continue
-                    lats = [c[0] for c in coords]
-                    lons = [c[1] for c in coords]
-                    import numpy as np
-                    gj = engine.polar_to_geojson(
-                        self.computation_request.radar_lat,
-                        self.computation_request.radar_lon,
-                        np.linspace(0, 360, len(lats), endpoint=False),
-                        np.array([6371000.0] * len(lats)),  # placeholder
-                        height_m=height_m
-                    )
-                    all_geojsons.append(gj)
+        try:
+            from src.coverage_engine import CoverageEngine
+            engine = CoverageEngine()
+            all_features = []
 
-                merged = engine.geojson_to_feature_collection(*all_geojsons)
-                engine.export_geojson(merged, path)
-                self.label_status.setText(f"Exported: {Path(path).name}")
-                QMessageBox.information(self, "Export", f"Saved to {Path(path).name}")
-            except Exception as e:
-                QMessageBox.critical(self, "Export Error", str(e))
+            for height_m, band_data in self._last_coverage_data.items():
+                outer = band_data.get("outer") if isinstance(band_data, dict) else band_data
+                inner = band_data.get("inner") if isinstance(band_data, dict) else None
+                if not outer or len(outer) < 3:
+                    continue
+
+                # GeoJSON uses [lon, lat]; coverage_data stores (lat, lon)
+                outer_ring = [[c[1], c[0]] for c in outer]
+                outer_ring.append(outer_ring[0])  # close ring
+
+                rings = [outer_ring]
+                if inner and len(inner) >= 3:
+                    inner_ring = [[c[1], c[0]] for c in inner]
+                    inner_ring.append(inner_ring[0])
+                    rings.append(inner_ring)
+
+                color_info = engine._get_color_for_height(height_m)
+                all_features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": rings},
+                    "properties": {
+                        "antenna_lat": self.computation_request.radar_lat,
+                        "antenna_lon": self.computation_request.radar_lon,
+                        "height_m": height_m,
+                        "color": color_info["color"],
+                        "opacity": color_info["opacity"]
+                    }
+                })
+
+            geojson = {"type": "FeatureCollection", "features": all_features}
+            engine.export_geojson(geojson, path)
+            self.label_status.setText(f"Exported: {Path(path).name}")
+            QMessageBox.information(self, "Export", f"Saved to {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", str(e))
 
     def _on_export_png(self):
         """Export polar diagram as PNG."""

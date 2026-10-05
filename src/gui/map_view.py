@@ -77,6 +77,11 @@ class MapView(QWidget):
         self._shadow_geojson = None           # stored GeoJSON dict for polygon mode
         self._shadow_segments_cache = []      # stored segments for polygon mode
         self._shadow_az_step_cache = 2.0
+        # Mutable band config — updated from control panel via set_height_band_config()
+        self._band_config: dict = {
+            h: {"color": v["color"], "opacity": v["opacity"]}
+            for h, v in HEIGHT_BAND_COLORS.items()
+        }
 
         # Fixed temp file path — overwritten cleanly each render
         self._tmp_path = Path(tempfile.gettempdir()) / "radar_map_view.html"
@@ -143,12 +148,18 @@ class MapView(QWidget):
         self.web_engine.setUrl(QUrl("about:blank"))
         self.web_engine.setUrl(QUrl.fromLocalFile(str(self._tmp_path)))
 
+    def set_height_band_config(self, bands: list):
+        """Update colour/opacity table from control panel band config."""
+        self._band_config = {
+            b["height_m"]: {"color": b["color"], "opacity": b["opacity"]}
+            for b in bands
+        }
+
     def _get_color_info(self, height_m) -> dict:
         """Return color dict for height band, falling back to DEFAULT_COLOR."""
-        # Try exact int match first, then int-cast (handles float keys like 50.0)
-        ci = HEIGHT_BAND_COLORS.get(height_m)
+        ci = self._band_config.get(height_m)
         if ci is None:
-            ci = HEIGHT_BAND_COLORS.get(int(height_m), DEFAULT_COLOR)
+            ci = self._band_config.get(int(height_m), DEFAULT_COLOR)
         return ci
 
     def _compute_polygon_area_km2(self, coords_latlon: list) -> float:
@@ -546,7 +557,7 @@ L.polygon({latlngs_json}, {{
             polygon: false, polyline: false,
             circle: false, marker: false, circlemarker: false
         }},
-        edit: {{ featureGroup: drawnItems }}
+        edit: false
     }});
     map.addControl(drawControl);
 
