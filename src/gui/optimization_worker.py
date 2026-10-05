@@ -20,6 +20,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.site_optimizer import (
     generate_grid_points, compute_coverage_score, refine_pool_size, select_refine_pool,
+    land_candidates,
 )
 from src.gui.control_panel import ComputationRequest
 
@@ -102,35 +103,32 @@ class OptimizationWorker(QThread):
             _dem_data = np.where((_dem_data < -500) | (_dem_data > 9000), 0.0, _dem_data)
 
             # Generate candidate sites across the bounding box
-            points = generate_grid_points(*self.bbox, self.grid_step_m)
+            grid = generate_grid_points(*self.bbox, self.grid_step_m)
+            # Only land sites inside the DEM are usable radar positions. Each keeps
+            # its own DEM ground elevation — without it every candidate would use
+            # the control-panel elevation and highland sites would be undervalued.
+            points, n_sea, n_outside = land_candidates(grid, _dem_data, _dem_transform)
+            if not points:
+                self.optimization_error.emit(
+                    f"No land sites in the search area ({n_sea} over water, "
+                    f"{n_outside} outside the DEM). Move the search box over land."
+                )
+                return
             n_points = len(points)
             # Progress covers both passes: scout every point, then refine the shortlist
             total = n_points + min(n_points, refine_pool_size(self.k))
-            self.progress_update.emit(f"Evaluating {n_points} candidate sites...")
+            skipped = f" (skipped {n_sea} over water)" if n_sea else ""
+            self.progress_update.emit(f"Evaluating {n_points} candidate sites{skipped}...")
 
             # Mast + antenna height above ground level, preserved across all candidates
             _mast_agl = (self.request_template.antenna_amsl_m
                          - self.request_template.site_elevation_amsl_m)
 
             scores = []
-            for i, (lat, lon) in enumerate(points):
+            for i, (lat, lon, candidate_elev) in enumerate(points):
                 # Check cancellation flag
                 if self._cancelled:
                     return
-
-                # Look up actual terrain elevation at this candidate from the
-                # pre-loaded DEM (nearest-pixel).  Without this, every candidate
-                # uses the fixed elevation from the control panel, making highland
-                # sites appear as low as a coastal site and biasing the result.
-                col = (lon - _dem_transform.c) / _dem_transform.a
-                row = (lat - _dem_transform.f) / _dem_transform.e
-                in_bounds = (0 <= row < _dem_data.shape[0]
-                             and 0 <= col < _dem_data.shape[1])
-                if in_bounds:
-                    candidate_elev = float(_dem_data[int(round(row)), int(round(col))])
-                    candidate_elev = max(candidate_elev, 0.0)  # clamp to sea level
-                else:
-                    candidate_elev = self.request_template.site_elevation_amsl_m
 
                 # Create a request for this candidate with scout resolution and
                 # the candidate's actual terrain elevation

@@ -148,7 +148,7 @@ After a few seconds:
 ### Saving results
 
 - **Export PNG:** saves a picture of the polar chart. To save the map, take a screenshot.
-- **Export GeoJSON:** saves the coverage areas as a file for GIS software such as QGIS. This export is still a work in progress, and the saved shapes may not yet match what you see on the map.
+- **Export GeoJSON:** saves the coverage areas as a file for GIS software such as QGIS or Google Earth. Each height band is one shape with its height, area (km²) and colour.
 
 ---
 
@@ -162,7 +162,7 @@ The **Top-K Site Finder** tests many possible radar positions inside an area and
    - **Top N sites:** how many of the best sites to list,
    - **m grid:** the grid step, i.e. the spacing between test positions. Smaller means more sites, which is slower but more thorough,
    - **Target height range:** the aircraft heights to plan for.
-   The panel shows roughly how many sites will be tested.
+   The panel shows roughly how many sites will be tested. Positions over the sea are skipped automatically.
 4. Click **Find Top-K Sites**. It first does a quick scan of every candidate, then re-checks the best ones in full detail. A progress count appears, and you can stop at any time with **Cancel Search**.
 5. Results are listed as `X km² @ N m AGL`: the area covered at the lowest target height. Click **ℹ** for a full explanation.
 6. Click **Load** next to any result. This moves the radar there (with its correct ground height) and computes its full coverage straight away.
@@ -202,10 +202,8 @@ lat,lon,height_amsl_m,type,description
 
 ## Known limitations
 
-- **Export GeoJSON** is not finished. The saved shapes don't yet match the map.
-- **Top-K can suggest sites in the sea** if your search area includes water. Keep the search box over land, or ignore results with a site elevation of 0 m.
-- The **"Horizon" line** on the polar chart is drawn on the range axis, so its size is not meaningful. Use the coloured coverage lines instead.
 - The background map needs an internet connection.
+- Terrain outside the loaded `.tif` file is treated as flat sea level, so use a terrain file that covers your whole Max Range.
 
 ---
 

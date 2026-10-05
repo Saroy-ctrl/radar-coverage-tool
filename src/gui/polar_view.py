@@ -5,7 +5,6 @@ Responsibilities:
 - Matplotlib figure embedded in PyQt6
 - Polar plot: theta = azimuth (compass: theta_zero='N', theta_direction=-1)
 - r = max_range for selected height band
-- Draw horizon obstruction as filled area
 - Overlay coverage range as colored circle/arc per height
 - Legend: height band colors
 - Toolbar: pan/zoom/save
@@ -165,14 +164,9 @@ class PolarView(QWidget):
         # Set background
         self.ax.set_facecolor(DARK_BG)
 
-        # Draw horizon obstruction as filled area
-        if self.horizon_data is not None:
-            horizon_rad = np.deg2rad(self.horizon_data)
-            self.ax.fill_between(
-                azimuths_rad, 0, horizon_rad,
-                color='#8b0000', alpha=0.3, label='Horizon (obstruction)'
-            )
-            self.ax.plot(azimuths_rad, horizon_rad, color='#cc0000', linewidth=1.5, label='Horizon')
+        # The horizon elevation angle is NOT drawn: it is an angle and the radial
+        # axis is range in km, so any curve would have a meaningless size.
+        # Terrain blocking is already visible as the shape of each coverage line.
 
         # Draw coverage arcs for each height band (sorted highest first for visual clarity)
         heights_sorted = sorted(self.coverage_data.keys(), reverse=True)

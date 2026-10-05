@@ -6,6 +6,7 @@ Provides pure-Python functions (no Qt):
 - compute_coverage_score: replicate ComputationWorker radial math, return total km²
 - select_refine_pool: shortlist of best scout-scored candidates to re-score at full resolution
 - sample_ground_elevation_m: DEM ground height at a single (lat, lon)
+- land_candidates: drop sea / out-of-DEM candidates and attach ground elevation
 
 Reference: ComputationWorker.run() in src/gui/main_window.py (lines 59–346).
 No Qt imports anywhere in this module.
@@ -30,6 +31,10 @@ GEOD = Geod(ellps='WGS84')
 # Re-scoring a shortlist at full resolution recovered all 5 for ~8 s extra.
 REFINE_POOL_MIN = 20     # candidates re-scored at full resolution, at least
 REFINE_POOL_FACTOR = 4   # ... or this many per requested site, whichever is larger
+
+# SRTM products store open water as exactly 0 m (and nodata is mapped to 0 on load),
+# so a candidate pixel at exactly this value is sea, not a usable radar site.
+SEA_SURFACE_M = 0.0
 
 
 def generate_grid_points(
@@ -430,3 +435,38 @@ def sample_ground_elevation_m(dem_path: str, lat: float, lon: float):
     if (nodata is not None and value == nodata) or value < -500 or value > 9000:
         return 0.0
     return value
+
+
+def land_candidates(points: list, dem_data: np.ndarray, dem_transform) -> tuple:
+    """
+    Keep only candidate sites that sit on land inside the DEM.
+
+    Ground elevation uses the same nearest-pixel rule as the coverage
+    computation (round, clamped to the array). After nodata→0 cleanup, open
+    water in SRTM products is exactly SEA_SURFACE_M, so those pixels are sea.
+    Land below sea level (negative values, e.g. polders) is kept.
+
+    Args:
+        points: [(lat, lon), ...] candidate sites
+        dem_data: 2D elevation array (m AMSL), nodata already set to 0
+        dem_transform: rasterio affine transform of dem_data
+
+    Returns:
+        (land, n_sea, n_outside) where land = [(lat, lon, elev_amsl_m), ...]
+    """
+    n_rows, n_cols = dem_data.shape
+    land, n_sea, n_outside = [], 0, 0
+    for lat, lon in points:
+        col = (lon - dem_transform.c) / dem_transform.a
+        row = (lat - dem_transform.f) / dem_transform.e
+        if not (0 <= row < n_rows and 0 <= col < n_cols):
+            n_outside += 1
+            continue
+        r = min(int(round(row)), n_rows - 1)
+        c = min(int(round(col)), n_cols - 1)
+        elev_m = float(dem_data[r, c])
+        if elev_m == SEA_SURFACE_M:
+            n_sea += 1
+            continue
+        land.append((lat, lon, elev_m))
+    return land, n_sea, n_outside

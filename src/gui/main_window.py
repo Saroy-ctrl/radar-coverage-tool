@@ -852,7 +852,11 @@ class MainWindow(QMainWindow):
                     inner_ring.append(inner_ring[0])
                     rings.append(inner_ring)
 
-                color_info = engine._get_color_for_height(height_m)
+                # Live band colours from the control panel, same as the map shows
+                color_info = self.map_view._get_color_info(height_m)
+                area_km2 = self.map_view._compute_polygon_area_km2(outer)
+                if inner and len(inner) >= 3:
+                    area_km2 -= self.map_view._compute_polygon_area_km2(inner)
                 all_features.append({
                     "type": "Feature",
                     "geometry": {"type": "Polygon", "coordinates": rings},
@@ -860,6 +864,7 @@ class MainWindow(QMainWindow):
                         "antenna_lat": self.computation_request.radar_lat,
                         "antenna_lon": self.computation_request.radar_lon,
                         "height_m": height_m,
+                        "area_km2": round(area_km2, 2),
                         "color": color_info["color"],
                         "opacity": color_info["opacity"]
                     }
